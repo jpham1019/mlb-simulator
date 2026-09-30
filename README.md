@@ -1,9 +1,17 @@
-# MLB Paper Desk
+# MLB Simulator
 
-Paper-only MLB slate + US books. No real-money bets.
+Paper-only MLB closing desk. No real-money bets.
 
-**Live (after Pages is on):** https://jpham1019.github.io/mlb-paper-desk/
+**Live:** https://jpham1019.github.io/mlb-simulator/
 
-If that 404s: **Settings → Pages → Build and deployment → Source: Deploy from a branch → Branch: `main` / `/` (root) → Save.**
+## Use
+1. Open the live page and hard-refresh after each deploy.
+2. Paste your [Odds API](https://the-odds-api.com) key in the box (saved in that browser only — do not commit it).
+3. **Load Slate** — MLB Stats API + `baseball_mlb` odds (`h2h`, `spreads`, `totals`).
+4. Book a posted number from the dropdown, or rarely **Generate Paper Picks**.
+5. **Grade With Real Scores** after Final.
 
-Paste your Odds API key on the page. It is not in this repo. The paper book is stored in that browser only — use **Export book**.
+The paper book lives in this browser (`localStorage`). Clearing site data wipes it.
+
+## Repo
+Keep only `index.html` at the root of `main`. GitHub Pages is **Deploy from a branch → main / root**.
