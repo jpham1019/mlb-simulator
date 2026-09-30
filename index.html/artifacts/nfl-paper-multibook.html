@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NFL Paper Simulator v6 — Ratings, Line Shop, Real Settle</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; max-width: 1500px; margin: 0 auto; line-height: 1.45; }
+    h1 { margin-bottom: 4px; }
+    .subtitle { color: #94a3b8; margin-bottom: 12px; font-size: 0.92rem; }
+    .controls { background: #1e293b; padding: 16px; border-radius: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 12px; }
+    label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 4px; }
+    input, select { width: 100%; padding: 9px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: white; font-size: 1rem; box-sizing: border-box; }
+    button { background: #22c55e; color: #052e16; border: none; padding: 12px 16px; border-radius: 8px; font-size: 0.95rem; font-weight: 600; cursor: pointer; margin: 0 6px 8px 0; }
+    button:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+    .btn-blue { background: #3b82f6; color: white; }
+    .btn-red { background: #7f1d1d; color: #fecaca; }
+    .btn-gray { background: #475569; color: white; }
+    .btn-gold { background: #ca8a04; color: #1a1000; }
+    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin: 16px 0; }
+    .card { background: #1e293b; padding: 14px; border-radius: 10px; border: 1px solid #334155; }
+    .card .label { font-size: 0.75rem; color: #94a3b8; }
+    .card .value { font-size: 1.2rem; font-weight: 700; margin-top: 2px; }
+    .positive { color: #22c55e; } .negative { color: #ef4444; }
+    table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 10px; overflow: hidden; font-size: 0.78rem; margin-top: 8px; }
+    th, td { padding: 8px 9px; text-align: left; border-bottom: 1px solid #334155; vertical-align: top; }
+    th { background: #0f172a; color: #94a3b8; font-weight: 500; }
+    .won { color: #22c55e; font-weight: 600; } .lost { color: #ef4444; font-weight: 600; }
+    .pending { color: #fbbf24; font-weight: 600; } .push { color: #93c5fd; font-weight: 600; }
+    .empty { text-align: center; padding: 24px; color: #94a3b8; }
+    .section { margin-top: 24px; }
+    .message { background: #1e293b; border-left: 4px solid #22c55e; padding: 11px 15px; margin: 12px 0; border-radius: 0 8px 8px 0; display: none; }
+    .badge { font-size: 0.72rem; padding: 2px 7px; border-radius: 20px; background: #14532d; color: #86efac; }
+    .real { background: #1e3a5f; color: #93c5fd; }
+    .mkt { font-size: 0.7rem; padding: 2px 6px; border-radius: 6px; background: #334155; color: #cbd5e1; }
+    .na { color: #64748b; font-size: 0.75rem; }
+    .bookcell { white-space: nowrap; }
+    .status { font-size: 0.78rem; color: #94a3b8; margin: 8px 0 0; }
+    .flags { display: flex; flex-wrap: wrap; gap: 10px 16px; background: #1e293b; padding: 12px 16px; border-radius: 12px; margin-bottom: 12px; font-size: 0.85rem; }
+    .flags label { display: flex; align-items: center; gap: 6px; color: #cbd5e1; margin: 0; }
+    .flags input { width: auto; }
+  </style>
+</head>
+<body>
+  <h1>NFL Paper Simulator v6</h1>
+  <p class="subtitle">Paper-only. Ratings + line-shop + real ESPN scores to grade. Dates in Pacific Time. Does not place real bets.</p>
+
+  <div class="controls">
+    <div>
+      <label>Stake mode</label>
+      <select id="stakeMode">
+        <option value="pct">1% of bankroll</option>
+        <option value="kelly8">1/8 Kelly (cap 1.5%)</option>
+        <option value="kelly4" selected>1/4 Kelly (cap 2%)</option>
+        <option value="kelly2">1/2 Kelly (cap 3%)</option>
+        <option value="fixed">Fixed unit $</option>
+      </select>
+    </div>
+    <div>
+      <label>Fixed unit $</label>
+      <input type="number" id="unit" value="100" min="10" step="10">
+    </div>
+    <div>
+      <label>Daily stop (units)</label>
+      <input type="number" id="dailyStop" value="-3" max="0" step="1">
+    </div>
+    <div>
+      <label>Min model edge (pts)</label>
+      <input type="number" id="minEdge" value="0" min="0" step="0.5">
+    </div>
+    <div>
+      <label>Max picks</label>
+      <input type="number" id="maxBets" value="6" min="1" max="12">
+    </div>
+    <div>
+      <label>Preferred book</label>
+      <select id="prefBook">
+        <option value="best">Line-shop best number</option>
+        <option value="DraftKings">DraftKings</option>
+        <option value="FanDuel">FanDuel</option>
+        <option value="BetMGM">BetMGM</option>
+        <option value="Caesars">Caesars</option>
+      </select>
+    </div>
+    <div>
+      <label>Markets</label>
+      <select id="markets">
+        <option value="all">Spread + Total + ML</option>
+        <option value="spread">Spreads only</option>
+        <option value="total">Totals only</option>
+        <option value="ml">Moneyline only</option>
+      </select>
+    </div>
+    <div>
+      <label>The Odds API key</label>
+      <input type="password" id="oddsKey" value="ae5f20577c2d17a461685f0fdbcf7893" placeholder="Paste key">
+    </div>
+  </div>
+
+  <div class="flags">
+    <label><input type="checkbox" id="qbHomeOut"> Home QB out (−4 rating)</label>
+    <label><input type="checkbox" id="qbAwayOut"> Away QB out (−4 rating)</label>
+    <label><input type="checkbox" id="shortRestHome"> Home on short rest (−1.5)</label>
+    <label><input type="checkbox" id="windy"> Windy / bad weather (−2 total)</label>
+  </div>
+
+  <button class="btn-gold" onclick="runToday()">Run Today's Paper Day (PT)</button>
+  <button class="btn-gray" onclick="loadSlate()">Load Lines Only</button>
+  <button id="generateBtn" onclick="generatePicks()" disabled>1. Generate Paper Picks</button>
+  <button id="settleBtn" class="btn-blue" onclick="settleBets()">2. Grade With Real Scores</button>
+  <button class="btn-red" onclick="clearHistory()">Clear History</button>
+
+  <div id="message" class="message"></div>
+  <p class="status" id="bookStatus">Not loaded. Pacific date: <span id="ptDate"></span></p>
+
+  <div class="summary">
+    <div class="card"><div class="label">Bankroll</div><div class="value" id="bankroll">$10,000.00</div></div>
+    <div class="card"><div class="label">Total P/L</div><div class="value" id="pnl">$0.00</div></div>
+    <div class="card"><div class="label">Win / Push / Loss</div><div class="value" id="winrate">—</div></div>
+    <div class="card"><div class="label">CLV beat close</div><div class="value" id="clv">—</div></div>
+    <div class="card"><div class="label">Today PT units</div><div class="value" id="todayUnits">0.00</div></div>
+    <div class="card"><div class="label">Paper bets</div><div class="value" id="totalBets">0</div></div>
+  </div>
+
+  <div class="section">
+    <h3>Slate + model vs market <span class="badge" id="slateSource">Not loaded</span></h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Game (PT)</th>
+          <th>Records / weather</th>
+          <th>Model</th>
+          <th>DK</th>
+          <th>FanDuel</th>
+          <th>MGM</th>
+          <th>Caesars</th>
+          <th>Best shop</th>
+        </tr>
+      </thead>
+      <tbody id="slateBody">
+        <tr><td colspan="8" class="empty">Click Run Today's Paper Day</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h3>Paper Picks</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Pick</th>
+          <th>Book</th>
+          <th>Market</th>
+          <th>Taken</th>
+          <th>Close / now</th>
+          <th>CLV</th>
+          <th>Stake</th>
+          <th>Score</th>
+          <th>Status</th>
+          <th>Profit</th>
+        </tr>
+      </thead>
+      <tbody id="todayBody">
+        <tr><td colspan="10" class="empty">No picks yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h3>Full Paper History</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>PT date</th>
+          <th>Pick</th>
+          <th>Book</th>
+          <th>Market</th>
+          <th>CLV</th>
+          <th>Result</th>
+          <th>Profit</th>
+          <th>Bankroll</th>
+        </tr>
+      </thead>
+      <tbody id="historyBody">
+        <tr><td colspan="8" class="empty">No history yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    const STARTING = 10000;
+    const HFA = 2.5;
+    const BOOKS = ["DraftKings", "FanDuel", "BetMGM", "Caesars"];
+    const STORE = "nflPaperV6";
+
+    /* Prior-year / preseason power (pts vs league avg). Used until current record has sample. */
+    const PRIOR = {
+      "Kansas City Chiefs": 7.5, "Philadelphia Eagles": 6.8, "Baltimore Ravens": 6.5, "Buffalo Bills": 6.2,
+      "Detroit Lions": 5.8, "San Francisco 49ers": 5.0, "Green Bay Packers": 3.8, "Cincinnati Bengals": 3.5,
+      "Los Angeles Rams": 3.2, "Washington Commanders": 2.8, "Minnesota Vikings": 2.4, "Houston Texans": 2.2,
+      "Los Angeles Chargers": 2.0, "Pittsburgh Steelers": 1.6, "Tampa Bay Buccaneers": 1.4, "Seattle Seahawks": 1.2,
+      "Denver Broncos": 0.8, "Arizona Cardinals": 0.2, "Atlanta Falcons": 0.0, "Miami Dolphins": -0.4,
+      "Dallas Cowboys": -0.6, "Chicago Bears": -1.0, "Indianapolis Colts": -1.2, "New York Jets": -2.0,
+      "New England Patriots": -2.2, "Las Vegas Raiders": -2.8, "Jacksonville Jaguars": -3.0, "New Orleans Saints": -3.4,
+      "Carolina Panthers": -3.8, "New York Giants": -4.2, "Tennessee Titans": -4.8, "Cleveland Browns": -5.2
+    };
+
+    let slate = [];
+
+    function ptNow() {
+      return new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    }
+    function ptDate() {
+      return new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+    }
+    function toPT(iso) {
+      if (!iso) return "—";
+      return new Date(iso).toLocaleString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", hour: "numeric", minute: "2-digit" });
+    }
+
+    function load() {
+      try {
+        const d = JSON.parse(localStorage.getItem(STORE));
+        if (d && typeof d.bankroll === "number") {
+          d.pending = d.pending || [];
+          d.history = d.history || [];
+          if (d.dayKey !== ptDate()) { d.dayKey = ptDate(); d.dayUnits = 0; }
+          return d;
+        }
+      } catch (e) {}
+      return { bankroll: STARTING, history: [], pending: [], dayKey: ptDate(), dayUnits: 0 };
+    }
+    function save(s) { localStorage.setItem(STORE, JSON.stringify(s)); }
+
+    function el(id) { return document.getElementById(id); }
+    function setText(id, text) {
+      const n = el(id);
+      if (n) n.textContent = text;
+    }
+    function showMessage(text, isError) {
+      const box = el("message");
+      if (box) {
+        box.style.display = "block";
+        box.style.borderColor = isError ? "#ef4444" : "#22c55e";
+        box.textContent = String(text);
+      } else {
+        alert(text);
+      }
+      setText("bookStatus", String(text));
+    }
+
+    function americanToDecimal(am) {
+      am = Number(am);
+      if (!Number.isFinite(am)) return 1.91;
+      return am > 0 ? +(1 + am / 100).toFixed(3) : +(1 + 100 / Math.abs(am)).toFixed(3);
+    }
+    function fmtSpread(n) {
+      if (n == null || isNaN(n)) return "—";
+      return (Number(n) > 0 ? "+" : "") + Number(n);
+    }
+    function fmtAm(n) {
+      if (n == null || isNaN(n)) return "";
+      n = Number(n);
+      return (n > 0 ? "+" : "") + n;
+    }
+    function num(v) {
+      if (v == null || v === "") return null;
+      const n = Number(String(v).replace(/[^0-9+\-.]/g, ""));
+      return isNaN(n) ? null : n;
+    }
+    function emptyBooks() {
+      const o = {};
+      BOOKS.forEach(b => o[b] = null);
+      return o;
+    }
+    function normName(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, ""); }
+    function priorOf(name) {
+      if (PRIOR[name] != null) return PRIOR[name];
+      const key = Object.keys(PRIOR).find(k => normName(k).includes(normName(name).slice(0, 8)) || normName(name).includes(normName(k).slice(0, 8)));
+      return key ? PRIOR[key] : 0;
+    }
+    function recordWinPct(rec) {
+      if (!rec) return null;
+      const m = String(rec).match(/(\d+)\s*-\s*(\d+)/);
+      if (!m) return null;
+      const w = +m[1], l = +m[2], n = w + l;
+      if (n < 1) return null;
+      return w / n;
+    }
+
+    function ratingFor(team, rec, qbOut, shortRest) {
+      const prior = priorOf(team);
+      const wp = recordWinPct(rec);
+      const games = (() => {
+        const m = String(rec || "").match(/(\d+)\s*-\s*(\d+)/);
+        return m ? (+m[1] + +m[2]) : 0;
+      })();
+      const form = wp == null ? prior : ((wp - 0.5) * 14);
+      const wPrior = games < 4 ? 0.75 : games < 8 ? 0.4 : 0.2;
+      let r = wPrior * prior + (1 - wPrior) * form;
+      if (qbOut) r -= 4;
+      if (shortRest) r -= 1.5;
+      return +r.toFixed(2);
+    }
+
+    function parseEspnOddsItem(item) {
+      if (!item) return null;
+      if (item.pointSpread || item.total || item.moneyline) {
+        const hs = num(item.pointSpread && item.pointSpread.home && (item.pointSpread.home.close || item.pointSpread.home.open || {}).line);
+        const as = num(item.pointSpread && item.pointSpread.away && (item.pointSpread.away.close || item.pointSpread.away.open || {}).line);
+        const tot = num(item.total && item.total.over && (item.total.over.close || item.total.over.open || {}).line);
+        return {
+          homeSpread: hs,
+          awaySpread: as != null ? as : (hs != null ? -hs : null),
+          total: tot,
+          homeML: num(item.moneyline && item.moneyline.home && (item.moneyline.home.close || item.moneyline.home.open || {}).odds),
+          awayML: num(item.moneyline && item.moneyline.away && (item.moneyline.away.close || item.moneyline.away.open || {}).odds),
+          spreadPrice: num(item.pointSpread && item.pointSpread.home && (item.pointSpread.home.close || {}).odds) || -110,
+          overPrice: num(item.total && item.total.over && (item.total.over.close || {}).odds) || -110,
+          underPrice: num(item.total && item.total.under && (item.total.under.close || {}).odds) || -110,
+          openHomeSpread: num(item.pointSpread && item.pointSpread.home && item.pointSpread.home.open && item.pointSpread.home.open.line),
+          openTotal: num(item.total && item.total.over && item.total.over.open && item.total.over.open.line)
+        };
+      }
+      const home = item.homeTeamOdds || {};
+      const away = item.awayTeamOdds || {};
+      const homeSpread = num(home.spread != null ? home.spread : item.spread);
+      return {
+        homeSpread,
+        awaySpread: num(away.spread) != null ? num(away.spread) : (homeSpread != null ? -homeSpread : null),
+        total: num(item.overUnder),
+        homeML: num(home.moneyLine),
+        awayML: num(away.moneyLine),
+        spreadPrice: num(home.spreadOdds) || -110,
+        overPrice: num(item.overOdds) || -110,
+        underPrice: num(item.underOdds) || -110,
+        openHomeSpread: null,
+        openTotal: null
+      };
+    }
+
+    function bookCell(book) {
+      if (!book || (book.homeSpread == null && book.total == null && book.homeML == null)) return '<span class="na">—</span>';
+      return `<div class="bookcell">${book.homeSpread != null ? "H " + fmtSpread(book.homeSpread) : "H —"} ${fmtAm(book.spreadPrice)}<br>${book.total != null ? "O/U " + book.total : "O/U —"}<br>ML ${fmtAm(book.homeML)}/${fmtAm(book.awayML)}</div>`;
+    }
+
+    function shopBest(g, side) {
+      let best = null;
+      BOOKS.forEach(b => {
+        const L = g.books[b];
+        if (!L) return;
+        let score = null, text = "", american = -110, point = null;
+        if (side === "homeSpread" && L.homeSpread != null) { point = L.homeSpread; american = L.spreadPrice || -110; score = L.homeSpread - american / 1000; text = fmtSpread(L.homeSpread) + " " + fmtAm(american); }
+        if (side === "awaySpread" && L.awaySpread != null) { point = L.awaySpread; american = L.spreadPrice || -110; score = L.awaySpread - american / 1000; text = fmtSpread(L.awaySpread) + " " + fmtAm(american); }
+        if (side === "over" && L.total != null) { point = L.total; american = L.overPrice || -110; score = -L.total + (american > 0 ? american / 200 : 0); text = "O " + L.total + " " + fmtAm(american); }
+        if (side === "under" && L.total != null) { point = L.total; american = L.underPrice || -110; score = L.total + (american > 0 ? american / 200 : 0); text = "U " + L.total + " " + fmtAm(american); }
+        if (side === "homeML" && L.homeML != null) { american = L.homeML; score = american; text = fmtAm(american); }
+        if (side === "awayML" && L.awayML != null) { american = L.awayML; score = american; text = fmtAm(american); }
+        if (score == null) return;
+        if (!best || score > best.score) best = { book: b, score, text, american, point, line: L };
+      });
+      return best;
+    }
+
+    function clvText(bet, closeLine) {
+      if (!closeLine) return { label: "n/a", beat: null };
+      if (bet.market === "SPREAD" && bet.point != null && closeLine.point != null) {
+        const delta = bet.side === "home" ? (bet.point - closeLine.point) : (bet.point - closeLine.point);
+        const beat = delta > 0.01;
+        const lost = delta < -0.01;
+        return { label: (beat ? "beat " : lost ? "lost " : "push ") + fmtSpread(closeLine.point), beat: beat ? true : lost ? false : null, delta };
+      }
+      if (bet.market === "TOTAL" && bet.point != null && closeLine.point != null) {
+        const delta = bet.side === "over" ? (closeLine.point - bet.point) : (bet.point - closeLine.point);
+        const beat = delta > 0.01;
+        const lost = delta < -0.01;
+        return { label: (beat ? "beat " : lost ? "lost " : "push ") + closeLine.point, beat: beat ? true : lost ? false : null, delta };
+      }
+      if (bet.market === "ML" && closeLine.american != null) {
+        const beat = bet.american > closeLine.american;
+        const lost = bet.american < closeLine.american;
+        return { label: (beat ? "beat " : lost ? "lost " : "push ") + fmtAm(closeLine.american), beat: beat ? true : lost ? false : null };
+      }
+      return { label: "n/a", beat: null };
+    }
+
+    function unitSize(state) {
+      const mode = document.getElementById("stakeMode") ? document.getElementById("stakeMode").value : "pct";
+      if (mode === "pct") return Math.max(10, +(state.bankroll * 0.01).toFixed(2));
+      if (mode === "fixed") return Number(document.getElementById("unit").value) || 100;
+      return Math.max(10, +(state.bankroll * 0.01).toFixed(2));
+    }
+    function kellyStake(state, bet) {
+      const mode = document.getElementById("stakeMode") ? document.getElementById("stakeMode").value : "pct";
+      if (mode === "pct" || mode === "fixed") return unitSize(state);
+      const frac = mode === "kelly2" ? 0.5 : mode === "kelly4" ? 0.25 : 0.125;
+      const cap = mode === "kelly2" ? 0.03 : mode === "kelly4" ? 0.02 : 0.015;
+      const am = bet.american || -110;
+      const decOdds = americanToDecimal(am);
+      const b = decOdds - 1;
+      const breakeven = 1 / decOdds;
+      const bump = Math.max(-0.12, Math.min(0.12, Number(bet.edge || 0) * 0.025));
+      const p = Math.max(0.35, Math.min(0.72, breakeven + bump));
+      const f = b > 0 ? Math.max(0, p - (1 - p) / b) : 0;
+      return Math.max(10, +(state.bankroll * Math.min(cap, frac * f)).toFixed(2));
+    }
+
+    function stoppedOut(state) {
+      const cap = Number(document.getElementById("dailyStop").value);
+      const limit = Number.isFinite(cap) ? cap : -3;
+      return state.dayUnits <= limit;
+    }
+
+    function updateUI() {
+      const state = load();
+      setText("ptDate", ptDate() + " · " + ptNow());
+      const pnl = state.bankroll - STARTING;
+      const settled = state.history.filter(h => h.result === "WON" || h.result === "LOST" || h.result === "PUSH");
+      const w = settled.filter(h => h.result === "WON").length;
+      const p = settled.filter(h => h.result === "PUSH").length;
+      const l = settled.filter(h => h.result === "LOST").length;
+      const clvB = state.history.filter(h => h.clvBeat === true).length;
+      const clvN = state.history.filter(h => h.clvBeat === true || h.clvBeat === false).length;
+      setText("bankroll", "$" + state.bankroll.toLocaleString(undefined, { minimumFractionDigits: 2 }));
+      setText("pnl", (pnl >= 0 ? "+" : "") + "$" + pnl.toFixed(2));
+      if (el("pnl")) el("pnl").className = "value " + (pnl >= 0 ? "positive" : "negative");
+      setText("winrate", settled.length ? (w + "-" + p + "-" + l) : "—");
+      setText("clv", clvN ? (clvB + "/" + clvN) : "—");
+      setText("todayUnits", (state.dayUnits >= 0 ? "+" : "") + Number(state.dayUnits || 0).toFixed(2));
+      if (el("todayUnits")) el("todayUnits").className = "value " + ((state.dayUnits || 0) >= 0 ? "positive" : "negative");
+      setText("totalBets", String(state.history.length + state.pending.length));
+
+      const slateBody = el("slateBody");
+      if (!slateBody) return;
+      if (!slate.length) {
+        slateBody.innerHTML = `<tr><td colspan="8" class="empty">No slate loaded</td></tr>`;
+      } else {
+        slateBody.innerHTML = slate.map(g => {
+          const bestH = shopBest(g, "homeSpread");
+          return `<tr>
+            <td>${g.away}<br>@ ${g.home}<div class="na">${toPT(g.iso)} PT${g.final ? " · FINAL " + g.awayScore + "-" + g.homeScore : ""}</div></td>
+            <td>${g.awayRec || "0-0"} / ${g.homeRec || "0-0"}<div class="na">${g.weather || ""}</div></td>
+            <td>H ${fmtSpread(g.modelHomeSpread)}<br>O/U ${g.modelTotal}<div class="na">rtg ${g.awayRtg} / ${g.homeRtg}</div></td>
+            <td>${bookCell(g.books.DraftKings)}</td>
+            <td>${bookCell(g.books.FanDuel)}</td>
+            <td>${bookCell(g.books.BetMGM)}</td>
+            <td>${bookCell(g.books.Caesars)}</td>
+            <td>${bestH ? bestH.book + "<br>" + bestH.text : "—"}</td>
+          </tr>`;
+        }).join("");
+      }
+
+      const rows = (state.pending || []).map(b => `
+        <tr>
+          <td>${b.event}</td><td>${b.book}</td><td><span class="mkt">${b.market}</span></td>
+          <td>${b.lineText}</td><td>${b.closeText || "pending close"}</td>
+          <td>${b.clvLabel || "—"}</td><td>$${b.stake}</td>
+          <td>${b.scoreText || "—"}</td>
+          <td class="pending">${b.status || "PENDING"}</td><td>—</td>
+        </tr>`).concat((state.history.filter(h => h.date === ptDate()).reverse()).map(h => `
+        <tr>
+          <td>${h.event}</td><td>${h.book}</td><td><span class="mkt">${h.market}</span></td>
+          <td>${h.lineText}</td><td>${h.closeText || "—"}</td>
+          <td>${h.clvLabel || "—"}</td><td>$${h.stake}</td>
+          <td>${h.scoreText || "—"}</td>
+          <td class="${h.result === "WON" ? "won" : h.result === "PUSH" ? "push" : "lost"}">${h.result}</td>
+          <td class="${h.profit >= 0 ? "won" : "lost"}">${h.profit >= 0 ? "+" : ""}${h.profit.toFixed(2)}</td>
+        </tr>`));
+      if (el("todayBody")) el("todayBody").innerHTML = rows.length ? rows.join("") : `<tr><td colspan="10" class="empty">No paper picks yet</td></tr>`;
+
+      if (el("historyBody")) el("historyBody").innerHTML = state.history.length ? [...state.history].reverse().map(h => `
+        <tr>
+          <td>${h.date}</td><td>${h.event}</td><td>${h.book}</td><td>${h.market}</td>
+          <td>${h.clvLabel || "—"}</td>
+          <td class="${h.result === "WON" ? "won" : h.result === "PUSH" ? "push" : "lost"}">${h.result}</td>
+          <td class="${h.profit >= 0 ? "won" : "lost"}">${h.profit >= 0 ? "+" : ""}${h.profit.toFixed(2)}</td>
+          <td>$${Number(h.bankroll).toLocaleString()}</td>
+        </tr>`).join("") : `<tr><td colspan="8" class="empty">No history yet</td></tr>`;
+
+      if (el("generateBtn")) el("generateBtn").disabled = slate.length === 0 || stoppedOut(state);
+    }
+
+    function findGame(list, away, home) {
+      const a = normName(away), h = normName(home);
+      return list.find(g => normName(g.away).includes(a.slice(0, 8)) && normName(g.home).includes(h.slice(0, 8)))
+          || list.find(g => normName(g.away).includes(a.slice(0, 6)));
+    }
+
+    function parseOddsApiEvent(ev, games) {
+      const away = ev.away_team, home = ev.home_team;
+      let g = findGame(games, away, home);
+      if (!g) {
+        g = { away, home, iso: ev.commence_time, books: emptyBooks(), homeRec: "", awayRec: "", weather: "", final: false };
+        games.push(g);
+      }
+      (ev.bookmakers || []).forEach(bk => {
+        const key = String(bk.key || bk.title || "").toLowerCase();
+        let book = null;
+        if (key.includes("draftkings")) book = "DraftKings";
+        else if (key.includes("fanduel")) book = "FanDuel";
+        else if (key.includes("mgm")) book = "BetMGM";
+        else if (key.includes("caesars") || key.includes("williamhill")) book = "Caesars";
+        if (!book) return;
+        const line = g.books[book] || { homeSpread: null, awaySpread: null, total: null, homeML: null, awayML: null, spreadPrice: -110, overPrice: -110, underPrice: -110 };
+        (bk.markets || []).forEach(m => {
+          const outs = m.outcomes || [];
+          if (m.key === "spreads") {
+            outs.forEach(o => {
+              if (o.name === home) { line.homeSpread = num(o.point); line.spreadPrice = num(o.price) || -110; }
+              if (o.name === away) line.awaySpread = num(o.point);
+            });
+          }
+          if (m.key === "totals") {
+            const over = outs.find(o => /over/i.test(o.name));
+            const under = outs.find(o => /under/i.test(o.name));
+            if (over) { line.total = num(over.point); line.overPrice = num(over.price) || -110; }
+            if (under) line.underPrice = num(under.price) || -110;
+          }
+          if (m.key === "h2h") {
+            outs.forEach(o => {
+              if (o.name === home) line.homeML = num(o.price);
+              if (o.name === away) line.awayML = num(o.price);
+            });
+          }
+        });
+        g.books[book] = line;
+      });
+    }
+
+    function applyModel(games) {
+      const qbH = document.getElementById("qbHomeOut").checked;
+      const qbA = document.getElementById("qbAwayOut").checked;
+      const restH = document.getElementById("shortRestHome").checked;
+      const windy = document.getElementById("windy").checked;
+      games.forEach(g => {
+        g.homeRtg = ratingFor(g.home, g.homeRec, qbH, restH);
+        g.awayRtg = ratingFor(g.away, g.awayRec, qbA, false);
+        g.modelHomeSpread = +(-(g.homeRtg - g.awayRtg + HFA)).toFixed(1);
+        let tot = 45 + (g.homeRtg + g.awayRtg) * 0.35;
+        if (windy || /wind|snow|storm/i.test(g.weather || "")) tot -= 2;
+        g.modelTotal = +tot.toFixed(1);
+      });
+    }
+
+    function fallbackWeek1() {
+      const rows = [
+        ["New England Patriots", "Seattle Seahawks", "2026-09-10T00:20:00Z", -3.5, 44.5, -175, 145],
+        ["San Francisco 49ers", "Los Angeles Rams", "2026-09-11T00:35:00Z", -3.5, 48.5, -185, 154],
+        ["Tampa Bay Buccaneers", "Cincinnati Bengals", "2026-09-13T17:00:00Z", -3.5, 50.5, -198, 164],
+        ["New Orleans Saints", "Detroit Lions", "2026-09-13T17:00:00Z", -7, 49.5, -290, 235],
+        ["Cleveland Browns", "Jacksonville Jaguars", "2026-09-13T17:00:00Z", -8.5, 40.5, -440, 340],
+        ["Chicago Bears", "Carolina Panthers", "2026-09-13T17:00:00Z", 2.5, 47.5, -148, 124],
+        ["Atlanta Falcons", "Pittsburgh Steelers", "2026-09-13T17:00:00Z", -3.5, 41.5, -185, 155],
+        ["Buffalo Bills", "Houston Texans", "2026-09-13T17:00:00Z", -1, 44.5, -110, -110],
+        ["Baltimore Ravens", "Indianapolis Colts", "2026-09-13T17:00:00Z", 3.5, 47.5, -175, 145],
+        ["New York Jets", "Tennessee Titans", "2026-09-13T17:00:00Z", -1.5, 39.5, -125, 105],
+        ["Green Bay Packers", "Minnesota Vikings", "2026-09-13T17:00:00Z", -1.5, 46.5, -125, 105],
+        ["Washington Commanders", "Philadelphia Eagles", "2026-09-13T20:05:00Z", -5.5, 44.5, -230, 190],
+        ["Miami Dolphins", "Las Vegas Raiders", "2026-09-13T20:05:00Z", -3.5, 40.5, -185, 154],
+        ["Arizona Cardinals", "Los Angeles Chargers", "2026-09-13T20:05:00Z", -9.5, 47.5, -480, 360],
+        ["Dallas Cowboys", "New York Giants", "2026-09-14T00:20:00Z", 3, 48.5, -155, 130],
+        ["Denver Broncos", "Kansas City Chiefs", "2026-09-15T00:15:00Z", -2.5, 43.5, -140, 120]
+      ];
+      return rows.map(([away, home, iso, homeSpread, total, homeML, awayML]) => ({
+        away, home, iso, awayRec: "0-0", homeRec: "0-0", weather: "", final: false, homeScore: null, awayScore: null,
+        books: {
+          DraftKings: { homeSpread, awaySpread: -homeSpread, total, homeML, awayML, spreadPrice: -110, overPrice: -110, underPrice: -110 },
+          FanDuel: null, BetMGM: null, Caesars: null
+        }
+      }));
+    }
+
+    async function fetchScoreboardGames() {
+      const urls = [
+        "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+        "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=" + ptDate().replace(/-/g, "")
+      ];
+      let events = [];
+      for (const url of urls) {
+        try {
+          const r = await fetch(url);
+          if (!r.ok) continue;
+          const d = await r.json();
+          events = events.concat(d.events || []);
+        } catch (e) {}
+      }
+      const seen = new Set();
+      const games = [];
+      events.forEach(ev => {
+        if (seen.has(ev.id)) return;
+        seen.add(ev.id);
+        const comp = ev.competitions && ev.competitions[0];
+        if (!comp) return;
+        const home = (comp.competitors || []).find(c => c.homeAway === "home");
+        const away = (comp.competitors || []).find(c => c.homeAway === "away");
+        if (!home || !away) return;
+        const rec = t => (t.records && t.records[0] && t.records[0].summary) || "";
+        const weather = (comp.geoBroadcasts && comp.geoBroadcasts[0] && comp.geoBroadcasts[0].type && comp.geoBroadcasts[0].type.shortName) || (ev.weather && ev.weather.displayValue) || "";
+        const books = emptyBooks();
+        const odd = parseEspnOddsItem((comp.odds || [])[0]);
+        if (odd) books.DraftKings = odd;
+        const completed = !!(comp.status && comp.status.type && (comp.status.type.completed || /final/i.test(comp.status.type.name || "")));
+        games.push({
+          id: ev.id,
+          away: away.team.displayName,
+          home: home.team.displayName,
+          iso: comp.date || ev.date,
+          awayRec: rec(away),
+          homeRec: rec(home),
+          weather: weather || (ev.weather && (ev.weather.displayValue || ev.weather.conditionId)) || "",
+          books,
+          final: completed,
+          homeScore: num(home.score),
+          awayScore: num(away.score)
+        });
+      });
+      return games;
+    }
+
+    async function loadSlate() {
+      showMessage("Loading ESPN slate + odds…");
+      let games = [];
+      try {
+        games = await fetchScoreboardGames();
+        try {
+          const res = await fetch("https://site.web.api.espn.com/apis/v3/sports/football/nfl/odds");
+          if (res.ok) {
+            const data = await res.json();
+            const week = (data.lines && data.lines[0] && data.lines[0].events) || [];
+            week.forEach(ev => {
+              const comp = ev.competitions && ev.competitions[0];
+              if (!comp) return;
+              const home = (comp.competitors || []).find(c => c.homeAway === "home");
+              const away = (comp.competitors || []).find(c => c.homeAway === "away");
+              if (!home || !away) return;
+              let g = findGame(games, away.team.displayName, home.team.displayName);
+              const parsed = parseEspnOddsItem((comp.odds || [])[0]);
+              if (!g) {
+                g = { away: away.team.displayName, home: home.team.displayName, iso: comp.date, books: emptyBooks(), homeRec: "", awayRec: "", weather: "", final: false };
+                games.push(g);
+              }
+              if (parsed) g.books.DraftKings = Object.assign({}, g.books.DraftKings || {}, parsed);
+            });
+          }
+        } catch (e) {}
+        if (!games.length) throw new Error("No ESPN games");
+      } catch (err) {
+        games = fallbackWeek1();
+        showMessage("Live ESPN blocked or empty from this file tab. Using Week 1 fallback lines. Open the file in Chrome.", true);
+      }
+      if (!games.length) games = fallbackWeek1();
+
+      const key = (document.getElementById("oddsKey").value || "").trim();
+      let extra = [];
+      if (key) {
+        try {
+          const nflUrl = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds?regions=us&markets=h2h,spreads,totals&oddsFormat=american&bookmakers=draftkings,fanduel,betmgm,williamhill_us&apiKey=" + encodeURIComponent(key);
+          const r = await fetch(nflUrl);
+          if (!r.ok) throw new Error("Odds API HTTP " + r.status);
+          const arr = await r.json();
+          if (!Array.isArray(arr)) throw new Error((arr && arr.message) || "Odds API error");
+          arr.forEach(ev => parseOddsApiEvent(ev, games));
+          const found = new Set();
+          games.forEach(g => BOOKS.forEach(b => { if (g.books[b]) found.add(b); }));
+          extra = [...found].filter(b => b !== "DraftKings");
+        } catch (e) {
+          showMessage("Odds API extras failed (" + e.message + "). DK/ESPN still used.", true);
+        }
+      }
+
+      applyModel(games);
+      slate = games;
+      setText("slateSource", extra.length ? "ESPN + Odds API" : "ESPN / fallback");
+      if (el("slateSource")) el("slateSource").className = "badge real";
+      showMessage("Loaded " + games.length + " games with model spreads/totals.");
+      updateUI();
+    }
+
+    function pickSource(g, pref, side) {
+      if (pref === "best") return shopBest(g, side);
+      const L = g.books[pref];
+      if (!L) return shopBest(g, side);
+      const fake = shopBest({ books: { [pref]: L } }, side);
+      return fake ? Object.assign(fake, { book: pref, line: L }) : shopBest(g, side);
+    }
+
+    function generatePicks() {
+      const state = load();
+      if (!slate.length) return;
+      if (stoppedOut(state)) {
+        showMessage("Daily stop hit (" + state.dayUnits + " units). Wait until next PT day.", true);
+        return;
+      }
+      const minEdge = Number(document.getElementById("minEdge").value);
+      const edgeNeed = Number.isFinite(minEdge) ? minEdge : 0;
+      const maxBets = Number(document.getElementById("maxBets").value) || 6;
+      const markets = document.getElementById("markets").value;
+      const pref = document.getElementById("prefBook").value;
+      const stake = unitSize(state);
+      const pool = [];
+
+      slate.forEach(g => {
+        if (g.final) return;
+        const homeShop = pickSource(g, pref, "homeSpread");
+        const awayShop = pickSource(g, pref, "awaySpread");
+        const overShop = pickSource(g, pref, "over");
+        const underShop = pickSource(g, pref, "under");
+        const hml = pickSource(g, pref, "homeML");
+        const aml = pickSource(g, pref, "awayML");
+
+        if (homeShop && homeShop.point != null) {
+          const edge = g.modelHomeSpread - homeShop.point;
+          pool.push({ event: g.home + " " + fmtSpread(homeShop.point) + " vs " + g.away, book: homeShop.book, market: "SPREAD", side: "home", point: homeShop.point, american: homeShop.american, lineText: homeShop.text, odds: americanToDecimal(homeShop.american), stake, edge: +edge.toFixed(2), model: g.modelHomeSpread, gameKey: g.home + "|" + g.away });
+        }
+        if (awayShop && awayShop.point != null) {
+          const edge = awayShop.point - g.modelHomeSpread;
+          pool.push({ event: g.away + " " + fmtSpread(awayShop.point) + " vs " + g.home, book: awayShop.book, market: "SPREAD", side: "away", point: awayShop.point, american: awayShop.american, lineText: awayShop.text, odds: americanToDecimal(awayShop.american), stake, edge: +edge.toFixed(2), model: -g.modelHomeSpread, gameKey: g.home + "|" + g.away });
+        }
+        if (overShop && overShop.point != null) {
+          const edge = g.modelTotal - overShop.point;
+          pool.push({ event: g.away + " @ " + g.home + " Over " + overShop.point, book: overShop.book, market: "TOTAL", side: "over", point: overShop.point, american: overShop.american, lineText: overShop.text, odds: americanToDecimal(overShop.american), stake, edge: +edge.toFixed(2), model: g.modelTotal, gameKey: g.home + "|" + g.away });
+        }
+        if (underShop && underShop.point != null) {
+          const edge = underShop.point - g.modelTotal;
+          pool.push({ event: g.away + " @ " + g.home + " Under " + underShop.point, book: underShop.book, market: "TOTAL", side: "under", point: underShop.point, american: underShop.american, lineText: underShop.text, odds: americanToDecimal(underShop.american), stake, edge: +edge.toFixed(2), model: g.modelTotal, gameKey: g.home + "|" + g.away });
+        }
+        if (hml && hml.american != null) {
+          const impliedHome = 1 / americanToDecimal(hml.american);
+          const modelHomeWin = 1 / (1 + Math.pow(10, -((g.homeRtg - g.awayRtg + HFA) / 15)));
+          pool.push({ event: g.home + " ML vs " + g.away, book: hml.book, market: "ML", side: "home", american: hml.american, lineText: hml.text, odds: americanToDecimal(hml.american), stake, edge: +((modelHomeWin - impliedHome) * 10).toFixed(2), model: g.modelHomeSpread, gameKey: g.home + "|" + g.away });
+        }
+        if (aml && aml.american != null) {
+          const implied = 1 / americanToDecimal(aml.american);
+          const modelAway = 1 / (1 + Math.pow(10, -((g.awayRtg - g.homeRtg - HFA) / 15)));
+          pool.push({ event: g.away + " ML vs " + g.home, book: aml.book, market: "ML", side: "away", american: aml.american, lineText: aml.text, odds: americanToDecimal(aml.american), stake, edge: +((modelAway - implied) * 10).toFixed(2), model: -g.modelHomeSpread, gameKey: g.home + "|" + g.away });
+        }
+      });
+
+      let filtered = pool;
+      if (markets === "ml") filtered = pool.filter(b => b.market === "ML");
+      if (markets === "spread") filtered = pool.filter(b => b.market === "SPREAD");
+      if (markets === "total") filtered = pool.filter(b => b.market === "TOTAL");
+      filtered = filtered.filter(b => b.edge >= edgeNeed).sort((a, b) => b.edge - a.edge);
+
+      const usedGameMkt = new Set();
+      const take = [];
+      const order = markets === "all" ? ["SPREAD", "TOTAL", "ML"] : [filtered[0] && filtered[0].market];
+      order.filter(Boolean).forEach(m => {
+        filtered.filter(b => b.market === m).forEach(b => {
+          const k = b.gameKey + "|" + b.market;
+          if (usedGameMkt.has(k) || take.length >= maxBets) return;
+          usedGameMkt.add(k);
+          b.status = "PENDING";
+          b.date = ptDate();
+          take.push(b);
+        });
+      });
+      if (markets !== "all") {
+        take.length = 0;
+        usedGameMkt.clear();
+        filtered.forEach(b => {
+          const k = b.gameKey + "|" + b.market;
+          if (usedGameMkt.has(k) || take.length >= maxBets) return;
+          usedGameMkt.add(k);
+          b.status = "PENDING";
+          b.date = ptDate();
+          take.push(b);
+        });
+      }
+
+      state.pending = take;
+      if (!take.length) {
+        const loosened = filtered.length ? filtered.slice(0, maxBets) : pool.sort((a, b) => b.edge - a.edge).slice(0, maxBets);
+        loosened.forEach(b => { b.status = "PENDING"; b.date = ptDate(); });
+        state.pending = loosened;
+      }
+      (state.pending || []).forEach(b => { b.stake = kellyStake(state, b); });
+      save(state);
+      if (!take.length) {
+        showMessage(state.pending.length ? ("No " + edgeNeed + "-pt edges. Logged " + state.pending.length + " closest paper plays instead.") : "Slate loaded but no bettable lines. Click Load Lines Only and check the table.", true);
+      } else {
+        showMessage("Generated " + take.length + " paper pick(s). Stake mode: " + (document.getElementById("stakeMode") && document.getElementById("stakeMode").value) + ".");
+      }
+      updateUI();
+    }
+
+    function gradeBet(bet, g) {
+      if (!g || !g.final || g.homeScore == null || g.awayScore == null) return null;
+      const hs = g.homeScore, as = g.awayScore, tot = hs + as;
+      const scoreText = as + "-" + hs;
+      if (bet.market === "ML") {
+        const homeWon = hs > as;
+        const won = bet.side === "home" ? homeWon : !homeWon;
+        if (hs === as) return { result: "PUSH", profit: 0, scoreText };
+        return { result: won ? "WON" : "LOST", profit: won ? bet.stake * (bet.odds - 1) : -bet.stake, scoreText };
+      }
+      if (bet.market === "SPREAD") {
+        const margin = bet.side === "home" ? (hs + bet.point) - as : (as + bet.point) - hs;
+        if (Math.abs(margin) < 0.001) return { result: "PUSH", profit: 0, scoreText };
+        const won = margin > 0;
+        return { result: won ? "WON" : "LOST", profit: won ? bet.stake * (bet.odds - 1) : -bet.stake, scoreText };
+      }
+      if (bet.market === "TOTAL") {
+        if (tot === bet.point) return { result: "PUSH", profit: 0, scoreText };
+        const won = bet.side === "over" ? tot > bet.point : tot < bet.point;
+        return { result: won ? "WON" : "LOST", profit: won ? bet.stake * (bet.odds - 1) : -bet.stake, scoreText };
+      }
+      return null;
+    }
+
+    async function settleBets() {
+      showMessage("Fetching ESPN final scores…");
+      try { await loadSlate(); } catch (e) {}
+      const state = load();
+      const still = [];
+      let graded = 0;
+      (state.pending || []).forEach(bet => {
+        const parts = (bet.gameKey || "").split("|");
+        const g = parts.length === 2 ? findGame(slate, parts[1] === bet.event.split(" vs ")[0] ? parts[1] : parts[1], parts[0]) || findGame(slate, parts[1], parts[0]) : null;
+        const game = slate.find(x => (x.home + "|" + x.away) === bet.gameKey || (x.away + "|" + x.home) === bet.gameKey) || findGame(slate, (bet.event.split(" vs ")[1] || ""), (bet.event.split(" vs ")[0] || ""));
+        const matched = slate.find(x => bet.gameKey === x.home + "|" + x.away);
+        const gg = matched || game || g;
+        if (gg) {
+          const closeSide = bet.market === "SPREAD" ? (bet.side === "home" ? "homeSpread" : "awaySpread") : bet.market === "TOTAL" ? bet.side : (bet.side === "home" ? "homeML" : "awayML");
+          const close = shopBest(gg, closeSide) || (gg.books.DraftKings && { point: bet.side === "home" ? gg.books.DraftKings.homeSpread : gg.books.DraftKings.awaySpread, american: gg.books.DraftKings.homeML, book: "DraftKings" });
+          if (close) {
+            bet.closeText = close.text || (close.point != null ? String(close.point) : fmtAm(close.american));
+            const c = clvText(bet, { point: close.point, american: close.american });
+            bet.clvLabel = c.label;
+            bet.clvBeat = c.beat;
+          }
+        }
+        const gr = gradeBet(bet, gg);
+        if (!gr) {
+          still.push(bet);
+          return;
+        }
+        const profit = +gr.profit.toFixed(2);
+        state.bankroll = +(state.bankroll + profit).toFixed(2);
+        const units = profit / (bet.stake || 1);
+        if (bet.date === ptDate()) state.dayUnits = +(state.dayUnits + units).toFixed(2);
+        state.history.push({
+          date: bet.date || ptDate(),
+          event: bet.event,
+          book: bet.book,
+          market: bet.market,
+          lineText: bet.lineText,
+          closeText: bet.closeText,
+          clvLabel: bet.clvLabel,
+          clvBeat: bet.clvBeat,
+          stake: bet.stake,
+          scoreText: gr.scoreText,
+          result: gr.result,
+          profit,
+          bankroll: state.bankroll
+        });
+        graded++;
+      });
+      state.pending = still;
+      save(state);
+      if (!graded && still.length) showMessage("No finals yet. Picks stay pending until ESPN posts Final.", true);
+      else showMessage("Graded " + graded + " on real scores. " + still.length + " still live/pending.");
+      updateUI();
+    }
+
+    async function runToday() {
+      try {
+        showMessage("Running paper day…");
+        await loadSlate();
+        generatePicks();
+      } catch (e) {
+        showMessage("Run failed: " + (e && e.message ? e.message : e), true);
+        console.error(e);
+      }
+    }
+
+    function clearHistory() {
+      if (confirm("Clear all paper history and reset bankroll to $10,000?")) {
+        localStorage.removeItem(STORE);
+        slate = [];
+        updateUI();
+        showMessage("History cleared.");
+      }
+    }
+
+    updateUI();
+  </script>
+</body>
+</html>

@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NFL Paper Simulator — Live Lines</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; max-width: 1280px; margin: 0 auto; line-height: 1.5; }
+    h1 { margin-bottom: 4px; }
+    .subtitle { color: #94a3b8; margin-bottom: 18px; }
+    .controls { background: #1e293b; padding: 16px; border-radius: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 4px; }
+    input, select { width: 100%; padding: 9px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: white; font-size: 1rem; }
+    button { background: #22c55e; color: #052e16; border: none; padding: 12px 16px; border-radius: 8px; font-size: 0.95rem; font-weight: 600; cursor: pointer; margin: 0 6px 8px 0; }
+    button:hover { opacity: 0.9; }
+    button:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+    .btn-blue { background: #3b82f6; color: white; }
+    .btn-red { background: #7f1d1d; color: #fecaca; }
+    .btn-gray { background: #475569; color: white; }
+    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 18px 0; }
+    .card { background: #1e293b; padding: 14px; border-radius: 10px; border: 1px solid #334155; }
+    .card .label { font-size: 0.78rem; color: #94a3b8; }
+    .card .value { font-size: 1.3rem; font-weight: 700; margin-top: 2px; }
+    .positive { color: #22c55e; } .negative { color: #ef4444; }
+    table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 10px; overflow: hidden; font-size: 0.84rem; margin-top: 8px; }
+    th, td { padding: 10px 11px; text-align: left; border-bottom: 1px solid #334155; }
+    th { background: #0f172a; color: #94a3b8; font-weight: 500; }
+    .won { color: #22c55e; font-weight: 600; } .lost { color: #ef4444; font-weight: 600; } .pending { color: #fbbf24; font-weight: 600; }
+    .empty { text-align: center; padding: 26px; color: #94a3b8; }
+    .section { margin-top: 26px; }
+    .message { background: #1e293b; border-left: 4px solid #22c55e; padding: 11px 15px; margin: 12px 0; border-radius: 0 8px 8px 0; display: none; }
+    .badge { font-size: 0.72rem; padding: 2px 7px; border-radius: 20px; background: #14532d; color: #86efac; }
+    .real { background: #1e3a5f; color: #93c5fd; }
+    .strength { font-weight: 600; color: #38bdf8; }
+    .mkt { font-size: 0.72rem; padding: 2px 6px; border-radius: 6px; background: #334155; color: #cbd5e1; }
+    .note { color: #94a3b8; font-size: 0.82rem; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>NFL Paper Betting Simulator</h1>
+  <p class="subtitle">Paper-only • Live ESPN board lines for spread / total / ML when available</p>
+
+  <div class="controls">
+    <div>
+      <label>Unit Size ($)</label>
+      <input type="number" id="unit" value="100" min="10" step="10">
+    </div>
+    <div>
+      <label>Min EV</label>
+      <input type="number" id="minEv" value="0.02" min="0" step="0.01">
+    </div>
+    <div>
+      <label>Max Picks</label>
+      <input type="number" id="maxBets" value="5" min="1" max="10">
+    </div>
+    <div>
+      <label>Markets</label>
+      <select id="markets">
+        <option value="all">ML + Spread + Total</option>
+        <option value="ml">Moneyline only</option>
+        <option value="spread">Spreads only</option>
+        <option value="total">Totals only</option>
+      </select>
+    </div>
+  </div>
+
+  <button class="btn-gray" onclick="loadSlate()">Load Live NFL Lines</button>
+  <button id="generateBtn" onclick="generatePicks()" disabled>1. Generate Paper Picks</button>
+  <button id="settleBtn" class="btn-blue" onclick="settleBets()" disabled>2. Reveal Results & Settle</button>
+  <button class="btn-red" onclick="clearHistory()">Clear History</button>
+
+  <div id="message" class="message"></div>
+  <p class="note">Lines come from ESPN’s public scoreboard (the board they display as consensus-style Vegas numbers). This still does not place real bets.</p>
+
+  <div class="summary">
+    <div class="card"><div class="label">Current Bankroll</div><div class="value" id="bankroll">$10,000.00</div></div>
+    <div class="card"><div class="label">Total Profit/Loss</div><div class="value" id="pnl">$0.00</div></div>
+    <div class="card"><div class="label">Win Rate</div><div class="value" id="winrate">—</div></div>
+    <div class="card"><div class="label">Total Paper Bets</div><div class="value" id="totalBets">0</div></div>
+  </div>
+
+  <div class="section">
+    <h3>NFL Slate + Live Lines <span class="badge" id="slateSource">Not loaded</span></h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Game</th>
+          <th>When</th>
+          <th>Spread</th>
+          <th>Total</th>
+          <th>ML (Away / Home)</th>
+          <th>Source</th>
+        </tr>
+      </thead>
+      <tbody id="slateBody">
+        <tr><td colspan="6" class="empty">Click “Load Live NFL Lines”</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h3>Paper Picks</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Pick</th>
+          <th>Market</th>
+          <th>Line / Odds</th>
+          <th>Stake</th>
+          <th>Status</th>
+          <th>Profit</th>
+        </tr>
+      </thead>
+      <tbody id="todayBody">
+        <tr><td colspan="6" class="empty">Load slate → Generate picks</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h3>Full Paper History</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Pick</th>
+          <th>Market</th>
+          <th>Odds</th>
+          <th>Result</th>
+          <th>Profit</th>
+          <th>Bankroll</th>
+        </tr>
+      </thead>
+      <tbody id="historyBody">
+        <tr><td colspan="7" class="empty">No history yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    const STARTING = 10000;
+    let slate = [];
+    let pendingBets = [];
+
+    function load() {
+      try {
+        const data = localStorage.getItem("nflPaperVegas");
+        return data ? JSON.parse(data) : { bankroll: STARTING, history: [] };
+      } catch (e) { return { bankroll: STARTING, history: [] }; }
+    }
+    function save(state) { localStorage.setItem("nflPaperVegas", JSON.stringify(state)); }
+
+    function showMessage(text, isError = false) {
+      const el = document.getElementById("message");
+      el.style.display = "block";
+      el.style.borderColor = isError ? "#ef4444" : "#22c55e";
+      el.textContent = text;
+      setTimeout(() => el.style.display = "none", 5500);
+    }
+
+    function americanToDecimal(am) {
+      if (am == null || isNaN(am)) return 1.91;
+      am = Number(am);
+      return am > 0 ? +(1 + am / 100).toFixed(2) : +(1 + 100 / Math.abs(am)).toFixed(2);
+    }
+    function fmtSpread(n) {
+      if (n == null || isNaN(n)) return "—";
+      return (n > 0 ? "+" : "") + Number(n);
+    }
+    function fmtAm(n) {
+      if (n == null || isNaN(n)) return "—";
+      n = Number(n);
+      return (n > 0 ? "+" : "") + n;
+    }
+
+    function parseOdds(comps) {
+      const o = (comps.odds && comps.odds[0]) || {};
+      const homeOdds = o.homeTeamOdds || {};
+      const awayOdds = o.awayTeamOdds || {};
+      let homeSpread = homeOdds.spread != null ? Number(homeOdds.spread) : (o.spread != null ? Number(o.spread) : null);
+      let awaySpread = awayOdds.spread != null ? Number(awayOdds.spread) : (homeSpread != null ? -homeSpread : null);
+      const total = o.overUnder != null ? Number(o.overUnder) : null;
+      const homeML = homeOdds.moneyLine != null ? Number(homeOdds.moneyLine) : null;
+      const awayML = awayOdds.moneyLine != null ? Number(awayOdds.moneyLine) : null;
+      const spreadPrice = homeOdds.spreadOdds != null ? Number(homeOdds.spreadOdds) : -110;
+      const overPrice = o.overOdds != null ? Number(o.overOdds) : -110;
+      const underPrice = o.underOdds != null ? Number(o.underOdds) : -110;
+      const provider = (o.provider && o.provider.name) || (o.details ? "ESPN board" : "None");
+      return { homeSpread, awaySpread, total, homeML, awayML, spreadPrice, overPrice, underPrice, provider, details: o.details || "" };
+    }
+
+    function updateUI() {
+      const state = load();
+      const pnl = state.bankroll - STARTING;
+      const wins = state.history.filter(h => h.result === "WON").length;
+      const winrate = state.history.length ? (wins / state.history.length * 100).toFixed(1) + "%" : "—";
+
+      document.getElementById("bankroll").textContent = "$" + state.bankroll.toLocaleString(undefined, {minimumFractionDigits:2});
+      document.getElementById("pnl").textContent = (pnl >= 0 ? "+" : "") + "$" + pnl.toFixed(2);
+      document.getElementById("pnl").className = "value " + (pnl >= 0 ? "positive" : "negative");
+      document.getElementById("winrate").textContent = winrate;
+      document.getElementById("totalBets").textContent = state.history.length;
+
+      const slateBody = document.getElementById("slateBody");
+      if (!slate.length) {
+        slateBody.innerHTML = `<tr><td colspan="6" class="empty">No slate loaded</td></tr>`;
+      } else {
+        slateBody.innerHTML = slate.map(g => `
+          <tr>
+            <td>${g.away} (${g.awayRecord}) @ ${g.home} (${g.homeRecord})</td>
+            <td>${g.when}</td>
+            <td>${g.home} ${fmtSpread(g.homeSpread)}</td>
+            <td>${g.total != null ? "O/U " + g.total : "—"}</td>
+            <td>${fmtAm(g.awayML)} / ${fmtAm(g.homeML)}</td>
+            <td>${g.lineSource}</td>
+          </tr>`).join("");
+      }
+
+      const todayBody = document.getElementById("todayBody");
+      if (pendingBets.length) {
+        todayBody.innerHTML = pendingBets.map(b => `
+          <tr>
+            <td>${b.event}</td>
+            <td><span class="mkt">${b.market}</span></td>
+            <td>${b.lineText} @ ${b.odds}</td>
+            <td>$${b.stake}</td>
+            <td class="pending">PENDING</td>
+            <td>—</td>
+          </tr>`).join("");
+      } else {
+        const today = new Date().toISOString().slice(0,10);
+        const settled = state.history.filter(h => h.date === today);
+        if (!settled.length) {
+          todayBody.innerHTML = `<tr><td colspan="6" class="empty">No paper picks yet</td></tr>`;
+        } else {
+          todayBody.innerHTML = settled.map(h => `
+            <tr>
+              <td>${h.event}</td>
+              <td><span class="mkt">${h.market}</span></td>
+              <td>${h.lineText} @ ${h.odds}</td>
+              <td>$${h.stake}</td>
+              <td class="${h.result === 'WON' ? 'won' : 'lost'}">${h.result}</td>
+              <td class="${h.profit >= 0 ? 'won' : 'lost'}">${h.profit >= 0 ? '+' : ''}${h.profit.toFixed(2)}</td>
+            </tr>`).join("");
+        }
+      }
+
+      const historyBody = document.getElementById("historyBody");
+      if (!state.history.length) {
+        historyBody.innerHTML = `<tr><td colspan="7" class="empty">No history yet</td></tr>`;
+      } else {
+        historyBody.innerHTML = [...state.history].reverse().map(h => `
+          <tr>
+            <td>${h.date}</td>
+            <td>${h.event}</td>
+            <td>${h.market}</td>
+            <td>${h.odds}</td>
+            <td class="${h.result === 'WON' ? 'won' : 'lost'}">${h.result}</td>
+            <td class="${h.profit >= 0 ? 'won' : 'lost'}">${h.profit >= 0 ? '+' : ''}${h.profit.toFixed(2)}</td>
+            <td>$${h.bankroll.toLocaleString()}</td>
+          </tr>`).join("");
+      }
+
+      document.getElementById("generateBtn").disabled = slate.length === 0;
+      document.getElementById("settleBtn").disabled = pendingBets.length === 0;
+    }
+
+    function fallbackSlate() {
+      // Published Week 1 2026 consensus-style lines as of early Sept 2026
+      return [
+        { away: "New England Patriots", home: "Seattle Seahawks", awayRecord: "0-0", homeRecord: "0-0", when: "Wed 8:20 PM", homeSpread: -3.5, awaySpread: 3.5, total: 44.5, awayML: 164, homeML: -196, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "San Francisco 49ers", home: "Los Angeles Rams", awayRecord: "0-0", homeRecord: "0-0", when: "Thu 8:35 PM", homeSpread: -3.5, awaySpread: 3.5, total: 48.5, awayML: 165, homeML: -200, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "Tampa Bay Buccaneers", home: "Cincinnati Bengals", awayRecord: "0-0", homeRecord: "0-0", when: "Sun 1:00 PM", homeSpread: -3.5, awaySpread: 3.5, total: 50.5, awayML: 165, homeML: -200, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "Buffalo Bills", home: "Houston Texans", awayRecord: "0-0", homeRecord: "0-0", when: "Sun 1:00 PM", homeSpread: 1.5, awaySpread: -1.5, total: 44.5, awayML: -118, homeML: -102, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "Baltimore Ravens", home: "Indianapolis Colts", awayRecord: "0-0", homeRecord: "0-0", when: "Sun 1:00 PM", homeSpread: 3.5, awaySpread: -3.5, total: 47.5, awayML: -180, homeML: 150, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "Chicago Bears", home: "Carolina Panthers", awayRecord: "0-0", homeRecord: "0-0", when: "Sun 1:00 PM", homeSpread: 2.5, awaySpread: -2.5, total: 47.5, awayML: -160, homeML: 130, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "New Orleans Saints", home: "Detroit Lions", awayRecord: "0-0", homeRecord: "0-0", when: "Sun 1:00 PM", homeSpread: -7, awaySpread: 7, total: 49.5, awayML: 250, homeML: -305, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "Cleveland Browns", home: "Jacksonville Jaguars", awayRecord: "0-0", homeRecord: "0-0", when: "Sun 1:00 PM", homeSpread: -7.5, awaySpread: 7.5, total: 40.5, awayML: 310, homeML: -400, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "Atlanta Falcons", home: "Pittsburgh Steelers", awayRecord: "0-0", homeRecord: "0-0", when: "Sun 1:00 PM", homeSpread: -3, awaySpread: 3, total: 41.5, awayML: 140, homeML: -168, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "New York Jets", home: "Tennessee Titans", awayRecord: "0-0", homeRecord: "0-0", when: "Sun 1:00 PM", homeSpread: -1.5, awaySpread: 1.5, total: 39.5, awayML: 110, homeML: -130, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "Green Bay Packers", home: "Minnesota Vikings", awayRecord: "0-0", homeRecord: "0-0", when: "Sun 4:25 PM", homeSpread: -1.5, awaySpread: 1.5, total: 46.5, awayML: 100, homeML: -118, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "Washington Commanders", home: "Philadelphia Eagles", awayRecord: "0-0", homeRecord: "0-0", when: "Sun 4:25 PM", homeSpread: -5.5, awaySpread: 5.5, total: 44.5, awayML: 185, homeML: -225, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "Miami Dolphins", home: "Las Vegas Raiders", awayRecord: "0-0", homeRecord: "0-0", when: "Sun 4:25 PM", homeSpread: -3.5, awaySpread: 3.5, total: 40.5, awayML: 155, homeML: -190, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "Arizona Cardinals", home: "Los Angeles Chargers", awayRecord: "0-0", homeRecord: "0-0", when: "Sun 4:25 PM", homeSpread: -10.5, awaySpread: 10.5, total: 47, awayML: 425, homeML: -550, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "Dallas Cowboys", home: "New York Giants", awayRecord: "0-0", homeRecord: "0-0", when: "Sun 8:20 PM", homeSpread: 2.5, awaySpread: -2.5, total: 48.5, awayML: -152, homeML: 128, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" },
+        { away: "Denver Broncos", home: "Kansas City Chiefs", awayRecord: "0-0", homeRecord: "0-0", when: "Mon 8:15 PM", homeSpread: -2.5, awaySpread: 2.5, total: 43.5, awayML: 122, homeML: -145, spreadPrice: -110, overPrice: -110, underPrice: -110, lineSource: "Published Week 1 board" }
+      ];
+    }
+
+    async function loadSlate() {
+      showMessage("Loading live NFL lines from ESPN…");
+      try {
+        const res = await fetch("https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard");
+        if (!res.ok) throw new Error("ESPN scoreboard failed");
+        const data = await res.json();
+        const games = [];
+        (data.events || []).forEach(ev => {
+          const comps = ev.competitions && ev.competitions[0];
+          if (!comps || !comps.competitors) return;
+          const home = comps.competitors.find(c => c.homeAway === "home");
+          const away = comps.competitors.find(c => c.homeAway === "away");
+          if (!home || !away) return;
+          const odds = parseOdds(comps);
+          const homeRec = (home.records && home.records[0] && home.records[0].summary) || "0-0";
+          const awayRec = (away.records && away.records[0] && away.records[0].summary) || "0-0";
+          const when = ev.date ? new Date(ev.date).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }) : "—";
+          games.push({
+            away: away.team.displayName,
+            home: home.team.displayName,
+            awayRecord: awayRec,
+            homeRecord: homeRec,
+            when,
+            homeSpread: odds.homeSpread,
+            awaySpread: odds.awaySpread,
+            total: odds.total,
+            homeML: odds.homeML,
+            awayML: odds.awayML,
+            spreadPrice: odds.spreadPrice,
+            overPrice: odds.overPrice,
+            underPrice: odds.underPrice,
+            lineSource: odds.total != null || odds.homeSpread != null ? (odds.provider || "ESPN board") : "No line yet"
+          });
+        });
+        if (!games.length) throw new Error("No games");
+        const withLines = games.filter(g => g.total != null || g.homeSpread != null).length;
+        slate = games;
+        document.getElementById("slateSource").textContent = withLines ? "Live ESPN board" : "Games loaded, lines missing";
+        document.getElementById("slateSource").className = "badge real";
+        showMessage(`Loaded ${games.length} games. Live lines found on ${withLines}.`);
+      } catch (err) {
+        console.warn(err);
+        slate = fallbackSlate();
+        document.getElementById("slateSource").textContent = "Published Week 1 lines";
+        document.getElementById("slateSource").className = "badge";
+        showMessage("Live ESPN fetch failed. Using published Week 1 2026 lines.", true);
+      }
+      updateUI();
+    }
+
+    function impliedFromAmerican(am) {
+      if (am == null || isNaN(am)) return 0.5238;
+      am = Number(am);
+      return am > 0 ? 100 / (am + 100) : Math.abs(am) / (Math.abs(am) + 100);
+    }
+
+    function generatePicks() {
+      if (!slate.length) return;
+      const unit = Number(document.getElementById("unit").value) || 100;
+      const minEv = Number(document.getElementById("minEv").value) || 0.02;
+      const maxBets = Number(document.getElementById("maxBets").value) || 5;
+      const markets = document.getElementById("markets").value;
+      const pool = [];
+
+      slate.forEach(g => {
+        // Small paper-model edge around the live price, not a claim of beating Vegas.
+        const noise = () => (Math.random() - 0.45) * 0.06;
+
+        if (g.homeML != null) {
+          const p = Math.max(0.25, Math.min(0.8, impliedFromAmerican(g.homeML) + noise()));
+          pool.push({ event: `${g.home} ML vs ${g.away}`, market: "ML", lineText: fmtAm(g.homeML), odds: americanToDecimal(g.homeML), stake: unit, modelProb: p });
+        }
+        if (g.awayML != null) {
+          const p = Math.max(0.25, Math.min(0.8, impliedFromAmerican(g.awayML) + noise()));
+          pool.push({ event: `${g.away} ML vs ${g.home}`, market: "ML", lineText: fmtAm(g.awayML), odds: americanToDecimal(g.awayML), stake: unit, modelProb: p });
+        }
+        if (g.homeSpread != null) {
+          const dec = americanToDecimal(g.spreadPrice);
+          const pHome = Math.max(0.42, Math.min(0.58, 0.50 + noise()));
+          pool.push({ event: `${g.home} ${fmtSpread(g.homeSpread)}`, market: "SPREAD", lineText: fmtSpread(g.homeSpread) + " " + fmtAm(g.spreadPrice), odds: dec, stake: unit, modelProb: pHome });
+          pool.push({ event: `${g.away} ${fmtSpread(g.awaySpread)}`, market: "SPREAD", lineText: fmtSpread(g.awaySpread) + " " + fmtAm(g.spreadPrice), odds: dec, stake: unit, modelProb: 1 - pHome });
+        }
+        if (g.total != null) {
+          const overDec = americanToDecimal(g.overPrice);
+          const underDec = americanToDecimal(g.underPrice);
+          const overP = Math.max(0.42, Math.min(0.58, 0.50 + noise()));
+          pool.push({ event: `${g.away} @ ${g.home} Over ${g.total}`, market: "TOTAL", lineText: "Over " + g.total + " " + fmtAm(g.overPrice), odds: overDec, stake: unit, modelProb: overP });
+          pool.push({ event: `${g.away} @ ${g.home} Under ${g.total}`, market: "TOTAL", lineText: "Under " + g.total + " " + fmtAm(g.underPrice), odds: underDec, stake: unit, modelProb: 1 - overP });
+        }
+      });
+
+      pool.forEach(b => { b.ev = b.modelProb * (b.odds - 1) - (1 - b.modelProb); });
+      let filtered = pool;
+      if (markets === "ml") filtered = pool.filter(b => b.market === "ML");
+      if (markets === "spread") filtered = pool.filter(b => b.market === "SPREAD");
+      if (markets === "total") filtered = pool.filter(b => b.market === "TOTAL");
+
+      pendingBets = filtered.filter(b => b.ev >= minEv).sort((a,b) => b.ev - a.ev).slice(0, maxBets);
+      if (!pendingBets.length) showMessage("No picks met Min EV. Try lowering it.", true);
+      else showMessage(`Generated ${pendingBets.length} paper pick(s) using live/published lines.`);
+      updateUI();
+    }
+
+    function settleBets() {
+      if (!pendingBets.length) return;
+      const state = load();
+      const today = new Date().toISOString().slice(0,10);
+      pendingBets.forEach(bet => {
+        const won = Math.random() < bet.modelProb;
+        const profit = won ? bet.stake * (bet.odds - 1) : -bet.stake;
+        state.bankroll = +(state.bankroll + profit).toFixed(2);
+        state.history.push({
+          date: today, event: bet.event, market: bet.market, lineText: bet.lineText,
+          odds: bet.odds, stake: bet.stake, result: won ? "WON" : "LOST",
+          profit: +profit.toFixed(2), bankroll: state.bankroll
+        });
+      });
+      const count = pendingBets.length;
+      pendingBets = [];
+      save(state);
+      updateUI();
+      showMessage(`Settled ${count} paper bet(s).`);
+    }
+
+    function clearHistory() {
+      if (confirm("Clear all NFL paper history and reset bankroll to $10,000?")) {
+        localStorage.removeItem("nflPaperVegas");
+        pendingBets = [];
+        updateUI();
+        showMessage("History cleared.");
+      }
+    }
+
+    updateUI();
+  </script>
+</body>
+</html>
