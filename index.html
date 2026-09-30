@@ -71,7 +71,7 @@
     </svg>
     Simulator v4</h1>
 
-  <div class="controls">
+  <div class="controls" onchange="saveSettings()">
     <div><label>Stake mode</label>
       <select id="stakeMode">
         <option value="pct" selected>1% bankroll</option>
@@ -95,9 +95,9 @@
         <option value="total">Totals</option>
         <option value="f5">First 5 only</option>
       </select></div>
-    <div><label>Odds API key (saved in this browser)</label><input type="password" id="oddsKey" value="ae5f20577c2d17a461685f0fdbcf7893" placeholder="US Odds API key" onchange="saveOddsKey()" onblur="saveOddsKey()"></div>
+    <div><label>Odds API key (saved in this browser)</label><input type="password" id="oddsKey" value="" placeholder="Paste your Odds API key" autocomplete="off" onchange="saveOddsKey()" onblur="saveOddsKey()"></div>
   </div>
-  <div class="flags">
+  <div class="flags" onchange="saveSettings()">
     <label><input type="checkbox" id="septSoftRL" checked> September: extra edge to fade RL dogs</label>
     <label><input type="checkbox" id="windOut"> Force wind blowing out</label>
     <label><input type="checkbox" id="autoRefresh" onchange="toggleRefresh()"> Auto-refresh slate + US odds every 5 min</label>
@@ -107,7 +107,9 @@
   <button id="generateBtn" onclick="generatePicks()" disabled>1. Generate Paper Picks</button>
   <button class="btn-blue" onclick="settleBets()">2. Grade With Real Scores</button>
   <button class="btn-red" onclick="clearHistory()">Clear MLB History</button>
-  <p class="subtitle" style="margin-top:0">Load Slate → Book a posted number (or rare Generate) → Grade.</p>
+  <button class="btn-gray" onclick="exportDesk()">Export book</button>
+  <label class="btn-gray" style="display:inline-block;cursor:pointer">Import book<input id="importFile" type="file" accept="application/json,.json" onchange="importDesk(event)" hidden></label>
+  <p class="subtitle" style="margin-top:0">Load Slate → Book a posted number (or rare Generate) → Grade. This browser only. A desktop file and the GitHub page do not share a book — Export, then Import on the other one.</p>
   <div id="message" class="message"></div>
   <p class="status" id="bookStatus">Not loaded. PT <span id="ptDate"></span></p>
   <div class="summary">
@@ -162,8 +164,7 @@
     </table>
   </div>
 <script>
-const STARTING=10000, UNIT=100, HFA=0.2, LG_ERA=4.10, STORE="mlbPaperV3", KEYSTORE="mlbOddsKeyV1", CLOSESTORE="mlbCloseV1";
-const DEFAULT_ODDS_KEY="ae5f20577c2d17a461685f0fdbcf7893";
+const STARTING=10000, UNIT=100, HFA=0.2, LG_ERA=4.10, STORE="mlbPaperV3", KEYSTORE="mlbOddsKeyV1", CLOSESTORE="mlbCloseV1", SETTINGS="mlbSettingsV1", BAK=STORE+".bak";
 const BOOK_MAP={
   draftkings:"DraftKings", fanduel:"FanDuel", betmgm:"BetMGM",
   williamhill_us:"Caesars", caesars:"Caesars",
@@ -204,49 +205,229 @@ function ptDate(){return new Date().toLocaleDateString("en-CA",{timeZone:"Americ
 function shiftDate(iso,days){const d=new Date(iso+"T12:00:00"); d.setDate(d.getDate()+days); return d.toISOString().slice(0,10);}
 function toPT(iso){if(!iso)return "—"; return new Date(iso).toLocaleString("en-US",{timeZone:"America/Los_Angeles",weekday:"short",hour:"numeric",minute:"2-digit"});}
 let memStore=null;
+let storageBlocked=false;
+let storageWarned=false;
+let bookWarnShown=false;
+let applyingSettings=false;
 function storageObj(){
   try{
     const s=window.localStorage;
-    if(!s) return null;
+    if(!s) throw new Error("no storage");
     const k=STORE+"_ping";
-    s.setItem(k,"1"); s.removeItem(k);
+    s.setItem(k,"1");
+    s.removeItem(k);
+    storageBlocked=false;
     return s;
-  }catch(e){ return null; }
+  }catch(e){
+    storageBlocked=true;
+    return null;
+  }
+}
+function warnPersist(){
+  if(storageWarned) return;
+  storageWarned=true;
+  showMessage("This browser blocked saving. Tickets disappear when you refresh. Open the page on its own (not in a sandbox), or use Export book.", true);
+}
+function writeItem(st, key, text){
+  try{
+    st.setItem(key, text);
+    return st.getItem(key)===text;
+  }catch(e){
+    const quota=/quota/i.test(String(e&&e.name)+" "+(e&&e.message));
+    if(quota && key!==CLOSESTORE){
+      try{
+        const raw=st.getItem(CLOSESTORE);
+        const m=raw?JSON.parse(raw):{};
+        pruneCloses(m, 21);
+        st.setItem(CLOSESTORE, JSON.stringify(m));
+        st.setItem(key, text);
+        return st.getItem(key)===text;
+      }catch(e2){}
+    }
+    return false;
+  }
+}
+function freshBook(){
+  return {bankroll:STARTING, history:[], pending:[], dayKey:ptDate(), dayUnits:0, rev:0, epoch:1};
+}
+function bookOk(d){
+  if(!d || typeof d!=="object" || typeof d.bankroll!=="number" || !isFinite(d.bankroll)) return false;
+  if(d.history!=null && !Array.isArray(d.history)) return false;
+  if(d.pending!=null && !Array.isArray(d.pending)) return false;
+  return true;
+}
+function normalizeBook(d){
+  if(!bookOk(d)) return null;
+  if(!Array.isArray(d.history)) d.history=[];
+  if(!Array.isArray(d.pending)) d.pending=[];
+  d.rev=Number(d.rev)||0;
+  d.epoch=Number(d.epoch)||1;
+  if(d.dayKey!==ptDate()){ d.dayKey=ptDate(); d.dayUnits=0; }
+  else d.dayUnits=Number(d.dayUnits)||0;
+  return d;
+}
+function copyBook(src, target){
+  target.bankroll=src.bankroll;
+  target.history=src.history;
+  target.pending=src.pending;
+  target.dayKey=src.dayKey;
+  target.dayUnits=src.dayUnits;
+  target.rev=src.rev;
+  target.epoch=src.epoch||1;
+  return target;
+}
+function mergeBooks(a, b){
+  const ea=Number(a&&a.epoch)||1, eb=Number(b&&b.epoch)||1;
+  if(ea!==eb) return (ea>eb?a:b);
+  const hist=new Map();
+  [].concat(a.history||[], b.history||[]).forEach(h=>{
+    if(!h) return;
+    const k=ticketKey(h)+"|"+(h.date||"")+"|"+(h.result||"");
+    if(!hist.has(k)) hist.set(k, h);
+  });
+  const history=[...hist.values()];
+  const graded=new Set(history.map(ticketKey));
+  const pend=new Map();
+  [].concat(a.pending||[], b.pending||[]).forEach(p=>{
+    if(!p) return;
+    const k=ticketKey(p);
+    if(graded.has(k) || pend.has(k)) return;
+    pend.set(k, p);
+  });
+  let bank=STARTING;
+  history.forEach(h=>{ bank+=Number(h.profit)||0; });
+  const dayUnits=history.filter(h=>h.date===ptDate()).reduce((s,h)=>s+(Number(h.profit)||0),0)/UNIT;
+  return {bankroll:+bank.toFixed(2), history, pending:[...pend.values()], dayKey:ptDate(), dayUnits:+dayUnits.toFixed(2), rev:Math.max(Number(a.rev)||0, Number(b.rev)||0), epoch:ea};
+}
+function readStoredBook(st){
+  const raw=st.getItem(STORE);
+  if(!raw) return {book:null};
+  try{
+    const d=normalizeBook(JSON.parse(raw));
+    if(d) return {book:d};
+    throw new Error("shape");
+  }catch(e){
+    try{ st.setItem(STORE+".bad", raw); }catch(err){}
+    const bak=st.getItem(BAK);
+    if(bak){
+      try{
+        const d=normalizeBook(JSON.parse(bak));
+        if(d) return {book:d, restored:true};
+      }catch(err){}
+    }
+    return {book:null, damaged:true};
+  }
 }
 function load(){
   try{
     const s=storageObj();
     if(s){
-      const raw=s.getItem(STORE);
-      if(raw){
-        const d=JSON.parse(raw);
-        if(d&&typeof d.bankroll==="number"){
-          d.pending=d.pending||[]; d.history=d.history||[];
-          if(d.dayKey!==ptDate()){ d.dayKey=ptDate(); d.dayUnits=0; }
-          memStore=d; return d;
-        }
+      const got=readStoredBook(s);
+      if(got.restored && !bookWarnShown){
+        bookWarnShown=true;
+        setTimeout(()=>showMessage("Saved book was damaged. Restored the last good copy.", true), 0);
+      } else if(got.damaged && !bookWarnShown){
+        bookWarnShown=true;
+        setTimeout(()=>showMessage("Saved book could not be read. Started at $10,000. The broken copy is still in this browser as mlbPaperV3.bad.", true), 0);
       }
-    } else if(memStore) return memStore;
+      if(got.book){ memStore=got.book; return got.book; }
+      if(memStore) return memStore;
+    } else if(memStore){
+      warnPersist();
+      return memStore;
+    } else warnPersist();
   }catch(e){}
-  const fresh={bankroll:STARTING,history:[],pending:[],dayKey:ptDate(),dayUnits:0};
-  memStore=fresh; return fresh;
+  const fresh=freshBook();
+  memStore=fresh;
+  return fresh;
 }
-function save(s){
+function save(s, opts){
+  const force=!!(opts&&opts.force);
   memStore=s;
-  try{ const st=storageObj(); if(st) st.setItem(STORE,JSON.stringify(s)); }catch(e){}
+  const st=storageObj();
+  if(!st){ warnPersist(); return false; }
+  for(let i=0;i<5;i++){
+    const got=readStoredBook(st);
+    let next=s;
+    if(!force && got.book && Number(got.book.rev)>Number(s.rev||0)) next=mergeBooks(s, got.book);
+    next=normalizeBook(next)||freshBook();
+    if(force && got.book) next.epoch=Math.max(Number(got.book.epoch)||1, Number(next.epoch)||1)+1;
+    next.rev=Math.max(Number(got.book&&got.book.rev)||0, Number(s.rev)||0)+1;
+    const text=JSON.stringify(next);
+    const prev=st.getItem(STORE);
+    if(prev && prev!==text){
+      try{ st.setItem(BAK, prev); }catch(e){}
+    }
+    if(writeItem(st, STORE, text) && st.getItem(STORE)===text){
+      copyBook(next, s);
+      memStore=s;
+      return true;
+    }
+  }
+  showMessage("Book was NOT saved. Export book now so these tickets are not lost.", true);
+  return false;
 }
 function saveOddsKey(){
   const v=(el("oddsKey")&&el("oddsKey").value||"").trim();
-  try{ const st=storageObj(); if(st&&v) st.setItem(KEYSTORE,v); }catch(e){}
+  const st=storageObj();
+  if(!st){ if(v) warnPersist(); return false; }
+  if(!v){
+    try{ st.removeItem(KEYSTORE); }catch(e){}
+    return true;
+  }
+  if(!writeItem(st, KEYSTORE, v)){
+    showMessage("Could not save the Odds API key in this browser.", true);
+    return false;
+  }
+  return true;
 }
 function loadOddsKey(){
   try{
     const st=storageObj();
-    const saved=st&&st.getItem(KEYSTORE);
-    const v=saved||DEFAULT_ODDS_KEY;
-    if(el("oddsKey")) el("oddsKey").value=v;
-    return v;
-  }catch(e){ if(el("oddsKey")&&!el("oddsKey").value) el("oddsKey").value=DEFAULT_ODDS_KEY; return DEFAULT_ODDS_KEY; }
+    const saved=(st&&st.getItem(KEYSTORE)||"").trim();
+    if(el("oddsKey")) el("oddsKey").value=saved;
+    return saved;
+  }catch(e){
+    if(el("oddsKey")) el("oddsKey").value="";
+    return "";
+  }
+}
+function collectSettings(){
+  return {
+    stakeMode:el("stakeMode")&&el("stakeMode").value,
+    unit:el("unit")&&el("unit").value,
+    dailyStop:el("dailyStop")&&el("dailyStop").value,
+    minEdge:el("minEdge")&&el("minEdge").value,
+    maxBets:el("maxBets")&&el("maxBets").value,
+    prefBook:el("prefBook")&&el("prefBook").value,
+    markets:el("markets")&&el("markets").value,
+    septSoftRL:!!(el("septSoftRL")&&el("septSoftRL").checked),
+    windOut:!!(el("windOut")&&el("windOut").checked),
+    autoRefresh:!!(el("autoRefresh")&&el("autoRefresh").checked)
+  };
+}
+function saveSettings(){
+  if(applyingSettings) return;
+  const st=storageObj();
+  if(!st){ warnPersist(); return; }
+  if(!writeItem(st, SETTINGS, JSON.stringify(collectSettings()))) showMessage("Could not save settings in this browser.", true);
+}
+function applySettings(){
+  const st=storageObj();
+  if(!st) return;
+  let d=null;
+  try{ d=JSON.parse(st.getItem(SETTINGS)||"null"); }catch(e){ return; }
+  if(!d||typeof d!=="object") return;
+  applyingSettings=true;
+  try{
+    ["stakeMode","unit","dailyStop","minEdge","maxBets","prefBook","markets"].forEach(id=>{
+      if(el(id)&&d[id]!=null&&d[id]!=="") el(id).value=d[id];
+    });
+    if(el("septSoftRL")) el("septSoftRL").checked=!!d.septSoftRL;
+    if(el("windOut")) el("windOut").checked=!!d.windOut;
+    if(el("autoRefresh")) el("autoRefresh").checked=!!d.autoRefresh;
+  }finally{ applyingSettings=false; }
+  if(d.autoRefresh) toggleRefresh();
 }
 function num(v){if(v==null||v==="")return null; const n=Number(String(v).replace(/[^0-9+\-.]/g,"")); return isNaN(n)?null:n;}
 function fmtAm(n){if(n==null||isNaN(n))return ""; n=Number(n); return (n>0?"+":"")+n;}
@@ -839,14 +1020,14 @@ async function loadSlate(opts){
   }
   const statsN=games.filter(g=>g.pk&&!g.oddsOnly).length;
   applyModel(games);
-  snapshotClose(games);
+  const tapeOk=snapshotClose(games);
   slate=games;
   setText("slateSource", statsN?"Stats API + US books":"Odds only — Stats slate missed");
   if(el("slateSource")) el("slateSource").className=statsN?"badge real":"badge";
   const nBooks=oddsBoard.length;
   const dropNote=clinch.dropped.length?(" · dropped "+clinch.dropped.length+" clinched series game(s)"):"";
   const vegasNote=vegasN?(" · "+vegasN+" Vegas numbers on open games"):"";
-  showMessage((statsN?("Stats "+statsN+" games"):"No Stats rows (blocker or empty date)")+" · "+nBooks+" US book lines · "+games.filter(g=>g.oddsOnly).length+" odds-only."+vegasNote+dropNote);
+  showMessage((statsN?("Stats "+statsN+" games"):"No Stats rows (blocker or empty date)")+" · "+nBooks+" US book lines · "+games.filter(g=>g.oddsOnly).length+" odds-only."+vegasNote+dropNote+(tapeOk?"":" Line tape was not saved."));
   updateUI();
 }
 function buildOddsBoard(games){
@@ -916,10 +1097,55 @@ function matchupKey(g){
 function matchupId(b){
   return norm(String(b.event||"").replace(/\s+Over\s+[\d.]+/,"").replace(/\s+Under\s+[\d.]+/,"").replace(/^F5\s+/,"").replace(/\s+[+-][\d.]+/,""))+"|"+(b.market||"");
 }
-function loadCloses(){
-  try{ const st=storageObj(); const raw=st&&st.getItem(CLOSESTORE); return raw?JSON.parse(raw):{}; }catch(e){ return {}; }
+function pruneCloses(m, days){
+  const keepDays=days||45;
+  const cutoff=Date.now()-keepDays*24*3600*1000;
+  Object.keys(m||{}).forEach(id=>{
+    const c=m[id];
+    const ts=Number(c&&(c.ts||(c.open&&c.open.ts)))||0;
+    if(ts && ts<cutoff) delete m[id];
+    if(c&&Array.isArray(c.tape)&&c.tape.length>16) c.tape=c.tape.slice(-16);
+  });
+  const keys=Object.keys(m||{});
+  if(keys.length>400){
+    keys.sort((a,b)=>((m[a]&&m[a].ts)||0)-((m[b]&&m[b].ts)||0));
+    keys.slice(0, keys.length-400).forEach(k=>{ delete m[k]; });
+  }
+  return m;
 }
-function saveCloses(m){ try{ const st=storageObj(); if(st) st.setItem(CLOSESTORE,JSON.stringify(m)); }catch(e){} }
+function loadCloses(){
+  try{
+    const st=storageObj();
+    const raw=st&&st.getItem(CLOSESTORE);
+    if(!raw) return {};
+    const m=JSON.parse(raw);
+    if(!m||typeof m!=="object"||Array.isArray(m)) throw new Error("shape");
+    return m;
+  }catch(e){
+    try{
+      const st=storageObj();
+      const raw=st&&st.getItem(CLOSESTORE);
+      if(st&&raw) st.setItem(CLOSESTORE+".bad", raw);
+    }catch(err){}
+    if(!bookWarnShown){
+      bookWarnShown=true;
+      setTimeout(()=>showMessage("Line tape could not be read. Started a new one. The broken copy is mlbCloseV1.bad.", true), 0);
+    }
+    return {};
+  }
+}
+function saveCloses(m){
+  pruneCloses(m, 45);
+  const st=storageObj();
+  if(!st){ warnPersist(); return false; }
+  const prev=st.getItem(CLOSESTORE);
+  if(prev){ try{ st.setItem(CLOSESTORE+".bak", prev); }catch(e){} }
+  if(!writeItem(st, CLOSESTORE, JSON.stringify(m))){
+    showMessage("Line tape was NOT saved. Export book keeps a copy with the tickets.", true);
+    return false;
+  }
+  return true;
+}
 function median(arr){
   const a=arr.filter(n=>n!=null&&!isNaN(n)).slice().sort((x,y)=>x-y);
   if(!a.length) return null;
@@ -959,7 +1185,7 @@ function snapshotClose(games){
     g.close=closes[id];
     g.cons=c;
   });
-  saveCloses(closes);
+  return saveCloses(closes);
 }
 function clvText(bet,g){
   if(!bet) return "—";
@@ -1059,7 +1285,7 @@ function generatePicks(){
   }));
   take.forEach(b=>{ b.stake=sizeBet(state,b); });
   state.pending=(state.pending||[]).concat(take);
-  save(state);
+  if(!save(state)){ updateUI(); return; }
   const nomkt=slate.filter(g=>!g.final&&!g.hasMarket).length;
   showMessage("Added "+take.length+" new pick(s). Pending "+state.pending.length+". "+(nomkt?nomkt+" game(s) have no market (not bet). ":"")+"Paste Odds API key if the board is empty.");
   updateUI();
@@ -1096,17 +1322,46 @@ async function settleBets(){
     state.history.push({date:bet.date||ptDate(),event:bet.event,book:bet.book,market:bet.market,lineText:bet.lineText,stake:bet.stake,scoreText:gr.scoreText,result:gr.result,profit,bankroll:state.bankroll,lockTitle:bet.lockTitle||lockTitle(bet),clv:clvText(bet,gg),gameKey:bet.gameKey,side:bet.side,american:bet.american});
     n++;
   });
-  state.pending=still; save(state);
+  state.pending=still;
+  if(!save(state)){ updateUI(); return; }
   showMessage(n?("Graded "+n+". "+still.length+" live."):"Nothing Final/F5 complete yet.");
   updateUI();
 }
 function clearPending(){
   const state=load();
   const n=(state.pending||[]).length;
-  state.pending=[]; save(state); updateUI();
+  state.pending=[];
+  if(!save(state)){ updateUI(); return; }
+  updateUI();
   showMessage("Cleared "+n+" pending ticket(s). History kept.");
 }
-function clearHistory(){if(confirm("Reset MLB paper bankroll only?")){ try{ const st=storageObj(); if(st) st.removeItem(STORE); }catch(e){} memStore=null; slate=[]; updateUI(); showMessage("MLB history cleared. NFL file untouched.");}}
+function clearHistory(){
+  if(!confirm("Erase the paper book, the line tape, and the saved Odds API key in this browser? This cannot be undone.")) return;
+  const st=storageObj();
+  if(!st){
+    memStore=null;
+    if(el("oddsKey")) el("oddsKey").value="";
+    slate=[];
+    updateUI();
+    warnPersist();
+    return;
+  }
+  const cur=load();
+  try{
+    st.removeItem(KEYSTORE);
+    st.removeItem(CLOSESTORE);
+    st.removeItem(CLOSESTORE+".bak");
+  }catch(e){}
+  if(el("oddsKey")) el("oddsKey").value="";
+  const fresh=freshBook();
+  fresh.epoch=(Number(cur.epoch)||1)+1;
+  fresh.rev=Number(cur.rev)||0;
+  memStore=null;
+  slate=[];
+  if(!save(fresh)){ updateUI(); return; }
+  updateUI();
+  showMessage("Paper book, line tape, and saved Odds API key cleared.");
+}
 function setRefreshClock(extra){
   const t=lastRefreshAt?new Date(lastRefreshAt).toLocaleTimeString("en-US",{timeZone:"America/Los_Angeles",hour:"numeric",minute:"2-digit",second:"2-digit"}):"—";
   setText("refreshClock", extra||("Last pull "+t+" PT"+(refreshTimer?" · every 5 min":" · off")));
@@ -1158,7 +1413,9 @@ function bookManual(pk, market, side){
   if((state.pending||[]).some(p=>ticketKey(p)===k||String(p.gameKey)===String(bet.gameKey)&&p.market===market)){
     showMessage("Already have that game/market pending.",true); return;
   }
-  state.pending=(state.pending||[]).concat([bet]); save(state); updateUI();
+  state.pending=(state.pending||[]).concat([bet]);
+  if(!save(state)){ updateUI(); return; }
+  updateUI();
   showMessage("Booked "+bet.lockTitle+" @ "+bet.book+" $"+bet.stake);
 }
 function exportDesk(){
@@ -1177,7 +1434,9 @@ function importDesk(ev){
       if(!st||typeof st.bankroll!=="number") throw new Error("No bankroll");
       st.pending=st.pending||[]; st.history=st.history||[];
       if(st.dayKey!==ptDate()){ st.dayKey=ptDate(); st.dayUnits=0; }
-      save(st);
+      st.rev=Number(st.rev)||0;
+      st.epoch=Number(st.epoch)||1;
+      if(!save(st,{force:true})){ updateUI(); return; }
       if(raw.closes) saveCloses(raw.closes);
       showMessage("Imported book. "+st.history.length+" graded, "+st.pending.length+" pending.");
       updateUI();
@@ -1209,9 +1468,17 @@ function renderVegas(){
 }
 
 loadOddsKey();
+applySettings();
 renderVegas();
-saveOddsKey();
 updateUI();
+window.addEventListener("storage", function(e){
+  if(!e.key||e.key===STORE||e.key===BAK||e.key===CLOSESTORE||e.key===KEYSTORE||e.key===SETTINGS){
+    if(e.key===KEYSTORE) loadOddsKey();
+    if(e.key===SETTINGS) applySettings();
+    updateUI();
+    setText("bookStatus","Updated from another tab. "+(el("bookStatus")&&el("bookStatus").textContent||""));
+  }
+});
 </script>
 </body>
 </html>
