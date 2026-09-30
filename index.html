@@ -45,6 +45,8 @@
     .vsin-link { color:#93c5fd; font-weight:600; }
     .vbook { font-size:0.72rem; color:#94a3b8; }
     .vnow { font-weight:600; }
+    .openline { background:#0f172a; border:1px solid #334155; border-radius:8px; padding:8px 10px; margin:8px 0; }
+    .openline b { color:#e2e8f0; }
   </style>
 </head>
 <body>
@@ -93,7 +95,7 @@
         <option value="total">Totals</option>
         <option value="f5">First 5 only</option>
       </select></div>
-    <div><label>Odds API key (saved in this browser)</label><input type="password" id="oddsKey" value="" placeholder="US Odds API key" onchange="saveOddsKey()" onblur="saveOddsKey()"></div>
+    <div><label>Odds API key (saved in this browser)</label><input type="password" id="oddsKey" value="ae5f20577c2d17a461685f0fdbcf7893" placeholder="US Odds API key" onchange="saveOddsKey()" onblur="saveOddsKey()"></div>
   </div>
   <div class="flags">
     <label><input type="checkbox" id="septSoftRL" checked> September: extra edge to fade RL dogs</label>
@@ -131,8 +133,9 @@
   </div>
   <div class="section">
     <h3>Vegas board <span class="badge">VSIN</span></h3>
-    <p class="status">Circa, Boomers, BetMGM, Caesars, Westgate, Stations, South Point, Wynn. Snapshot from the public line tracker. VSIN blocks this page from reading their site live.</p>
+    <p class="status">One line per game still open, in PT, from Circa, Caesars, or BetMGM. The eight-book grid stays underneath. A later game is hidden once a team has clinched the series.</p>
     <p><a class="vsin-link" href="https://data.vsin.com/vegas-odds-linetracker/?sportid=mlb" target="_blank" rel="noopener">Open live VSIN line tracker</a></p>
+    <div id="openLines"></div>
     <div id="vegasBody"></div>
   </div>
   <div class="section">
@@ -160,7 +163,7 @@
   </div>
 <script>
 const STARTING=10000, UNIT=100, HFA=0.2, LG_ERA=4.10, STORE="mlbPaperV3", KEYSTORE="mlbOddsKeyV1", CLOSESTORE="mlbCloseV1";
-const DEFAULT_ODDS_KEY="";
+const DEFAULT_ODDS_KEY="ae5f20577c2d17a461685f0fdbcf7893";
 const BOOK_MAP={
   draftkings:"DraftKings", fanduel:"FanDuel", betmgm:"BetMGM",
   williamhill_us:"Caesars", caesars:"Caesars",
@@ -320,7 +323,7 @@ function updateUI(){
       return `${g[side+"Pitch"]} (${era??"—"} / ${fip??"—"} / ${k??"—"}-${bb??"—"}${ip!=null?" · "+ip+" IP":""})`;
     };
     const recLine=`${g.awaySeasonRec||g.awayRec||"—"} / ${g.homeSeasonRec||g.homeRec||"—"}`;
-    const seriesLine=g.seriesNote?g.seriesNote+(g.seriesRecA||g.seriesRecH?` · series ${g.seriesRecA||"—"}-${g.seriesRecH||"—"}`:""):"";
+    const seriesLine=g.seriesNote?(g.seriesNote+(g.seriesWinsA!=null?` · series ${g.seriesWinsA}-${g.seriesWinsH}`:"")):"";
     const shop=g.hasMarket
       ? ((am||hm)?`${(am&&am.book)||(hm&&hm.book)} ${g.away} ${am?fmtAm(am.american):"—"} / ${g.home} ${hm?fmtAm(hm.american):"—"}`:"line up")
       : "<span class='na'>no market</span>";
@@ -354,6 +357,7 @@ function updateUI(){
   if(el("generateBtn")) el("generateBtn").disabled=!slate.length||stoppedOut(state);
   renderOddsBoard();
   renderStandings();
+  renderOpenLines();
 }
 
 function sameTeams(g,a,h){
@@ -586,6 +590,9 @@ function parseScheduleGames(data, games){
       awayId:away.team.id, homeId:home.team.id,
       iso:gm.gameDate,
       seriesRecA:rec(away), seriesRecH:rec(home),
+      seriesWinsA:seriesish&&away.leagueRecord?Number(away.leagueRecord.wins):null,
+      seriesWinsH:seriesish&&home.leagueRecord?Number(home.leagueRecord.wins):null,
+      gamesInSeries:gm.gamesInSeries||(seriesish?3:null),
       awayRec:rec(away), homeRec:rec(home),
       awaySeasonRec:"", homeSeasonRec:"",
       awayPitch:p(away).fullName||"TBD", homePitch:p(home).fullName||"TBD",
@@ -663,6 +670,126 @@ function renderStandings(){
   setText("standStatus", standingsRows.length+" teams · 2026 regular season (Stats API)");
 }
 
+const VEGAS_SHOP=["Circa","Caesars","BetMGM"];
+function teamHit(shortName, fullName, vegasName){
+  const v=norm(vegasName), f=norm(fullName||""), s=norm(shortName||"");
+  if(!v) return false;
+  return v===f || v.endsWith(s) || f.endsWith(v) || (s && v.includes(s));
+}
+function etToPtLabel(time){
+  const m=String(time||"").match(/(\d+):(\d+)\s*(AM|PM)/i);
+  if(!m) return time||"";
+  let h=+m[1]%12; if(/pm/i.test(m[3])) h+=12;
+  let pt=h-3; if(pt<0) pt+=24;
+  const ap=pt>=12?"PM":"AM";
+  let hh=pt%12; if(!hh) hh=12;
+  return hh+":"+m[2]+" "+ap+" PT";
+}
+function vegasWhen(v){
+  const m=String(v&&v.time||"").match(/(\d+):(\d+)\s*(AM|PM)/i);
+  if(!m||!VEGAS_BOARD||!VEGAS_BOARD.asOf) return null;
+  let h=+m[1]%12; if(/pm/i.test(m[3])) h+=12;
+  return new Date(VEGAS_BOARD.asOf+"T"+String(h).padStart(2,"0")+":"+m[2]+":00-04:00").getTime();
+}
+function parseMl(s){ if(s==null) return null; const n=Number(String(s).replace(/[^0-9+\-.]/g,"")); return isNaN(n)?null:n; }
+function parseRl(s){
+  const m=String(s||"").match(/([+-]?\d+(?:\.\d+)?)\s+([+-]\d+)/);
+  return m?{point:Number(m[1]), price:Number(m[2])}:null;
+}
+function parseTot(s){
+  const m=String(s||"").match(/(\d+(?:\.\d+)?)(?:\s*([ou])\s*([+-]?\d+))?/i);
+  return m?{total:Number(m[1]), side:m[2]?m[2].toLowerCase():null, price:m[3]!=null?Number(m[3]):-110}:null;
+}
+function vegasLineToBook(vg, book){
+  const a=vg.away&&vg.away.lines&&vg.away.lines[book];
+  const h=vg.home&&vg.home.lines&&vg.home.lines[book];
+  if(!a&&!h) return null;
+  const ar=parseRl(a&&a.rl), hr=parseRl(h&&h.rl);
+  const ot=parseTot(a&&a.tot), ut=parseTot(h&&h.tot);
+  const am=parseMl(a&&a.ml), hm=parseMl(h&&h.ml);
+  if(am==null&&hm==null&&!ar&&!hr&&!(ot&&ot.total)) return null;
+  return {
+    awayML:am, homeML:hm,
+    awaySpread:ar?ar.point:null, awaySpreadPrice:ar?ar.price:-110,
+    homeSpread:hr?hr.point:(ar?-ar.point:null), spreadPrice:hr?hr.price:-110,
+    total:(ot&&ot.total)||(ut&&ut.total)||null,
+    overPrice:ot&&ot.side==="o"?ot.price:-110,
+    underPrice:ut&&ut.side==="u"?ut.price:-110,
+    homeF5:null, awayF5:null, source:"VSIN"
+  };
+}
+function matchVegas(g){
+  if(!VEGAS_BOARD||!VEGAS_BOARD.games) return null;
+  const t=new Date(g.iso||0).getTime();
+  let best=null, bd=1e15;
+  VEGAS_BOARD.games.forEach(v=>{
+    if(!teamHit(g.away,g.awayFull,v.away&&v.away.name)) return;
+    if(!teamHit(g.home,g.homeFull,v.home&&v.home.name)) return;
+    const vt=vegasWhen(v);
+    const d=vt?Math.abs(vt-t):0;
+    if(d<bd){ bd=d; best=v; }
+  });
+  if(best && vegasWhen(best) && bd>8*3600*1000) return null;
+  return best;
+}
+function applyVegasBooks(games){
+  let n=0;
+  (games||[]).forEach(g=>{
+    const v=matchVegas(g);
+    if(!v) return;
+    g.vegas=v;
+    if(g.final||isLiveOrStarted(g)) return;
+    VEGAS_SHOP.forEach(book=>{
+      const have=g.books&&g.books[book];
+      if(have&&(have.homeML!=null||have.total!=null||have.homeSpread!=null)) return;
+      const line=vegasLineToBook(v, book);
+      if(!line) return;
+      g.books[book]=line;
+      n++;
+    });
+  });
+  return n;
+}
+function seriesId(g){ return [norm(g.awayFull||g.away), norm(g.homeFull||g.home)].sort().join("~"); }
+function dropClinched(games){
+  const dead={};
+  (games||[]).forEach(g=>{
+    if(!g.seriesish||g.seriesWinsA==null||g.seriesWinsH==null) return;
+    if(!g.final) return;
+    const need=Math.ceil((g.gamesInSeries||3)/2);
+    if(g.seriesWinsA>=need||g.seriesWinsH>=need) dead[seriesId(g)]=true;
+  });
+  const kept=[], dropped=[];
+  (games||[]).forEach(g=>{
+    if(g.seriesish&&!g.final&&!isLiveOrStarted(g)&&dead[seriesId(g)]) dropped.push(g);
+    else kept.push(g);
+  });
+  return {kept, dropped};
+}
+function shopCell(v, book){
+  if(!v||!book) return "no number";
+  const a=v.away.lines[book]||{}, h=v.home.lines[book]||{};
+  return book+" "+dash(a.ml)+" / "+dash(h.ml)+" · RL "+dash(a.rl)+" · O/U "+dash((a.tot||"").split(" ")[0]);
+}
+function renderOpenLines(){
+  const box=el("openLines"); if(!box) return;
+  const source=(slate&&slate.length)?slate.filter(g=>g.vegas):[];
+  const open=source.filter(g=>!g.final&&!isLiveOrStarted(g));
+  if(!slate.length){
+    const rows=(VEGAS_BOARD.games||[]).map(v=>{
+      const book=VEGAS_SHOP.find(b=>v.away&&v.away.lines&&v.away.lines[b]&&v.away.lines[b].ml)||VEGAS_SHOP[0];
+      return `<div class="openline"><b>${v.away.name} @ ${v.home.name}</b> · ${etToPtLabel(v.time)} · ${shopCell(v, book)}</div>`;
+    }).join("");
+    box.innerHTML=rows+`<p class="na">Load Slate to hide live games and to book these numbers.</p>`;
+    return;
+  }
+  if(!open.length){ box.innerHTML=`<p class="na">No open game with a Circa / Caesars / BetMGM number.</p>`; return; }
+  box.innerHTML=open.map(g=>{
+    const book=VEGAS_SHOP.find(b=>g.books&&g.books[b]&&g.books[b].awayML!=null)||VEGAS_SHOP[0];
+    return `<div class="openline"><b>${g.away} @ ${g.home}</b> · ${etToPtLabel(g.vegas.time)} · ${shopCell(g.vegas, book)}</div>`;
+  }).join("");
+}
+
 async function loadSlate(opts){
   const skipPitch=opts&&opts.skipPitch;
   showMessage(skipPitch?"Refreshing scores + US odds…":"Loading MLB slate…");
@@ -700,6 +827,9 @@ async function loadSlate(opts){
   const oddsNote=await pullMlbOdds(games);
   if(oddsNote) setText("oddsBoardStatus", oddsNote);
   games=dedupeSlate(games.filter(g=>!/visitor/i.test(g.away||"")&&!/^home$/i.test(g.home||"")));
+  const clinch=dropClinched(games);
+  games=clinch.kept;
+  const vegasN=applyVegasBooks(games);
   buildOddsBoard(games);
   if(!games.length){
     slate=[];
@@ -714,7 +844,9 @@ async function loadSlate(opts){
   setText("slateSource", statsN?"Stats API + US books":"Odds only — Stats slate missed");
   if(el("slateSource")) el("slateSource").className=statsN?"badge real":"badge";
   const nBooks=oddsBoard.length;
-  showMessage((statsN?("Stats "+statsN+" games"):"No Stats rows (blocker or empty date)")+" · "+nBooks+" US book lines · "+games.filter(g=>g.oddsOnly).length+" odds-only.");
+  const dropNote=clinch.dropped.length?(" · dropped "+clinch.dropped.length+" clinched series game(s)"):"";
+  const vegasNote=vegasN?(" · "+vegasN+" Vegas numbers on open games"):"";
+  showMessage((statsN?("Stats "+statsN+" games"):"No Stats rows (blocker or empty date)")+" · "+nBooks+" US book lines · "+games.filter(g=>g.oddsOnly).length+" odds-only."+vegasNote+dropNote);
   updateUI();
 }
 function buildOddsBoard(games){
@@ -1058,6 +1190,7 @@ function importDesk(ev){
 const VEGAS_BOARD = {"asOf": "2026-09-30", "source": "https://data.vsin.com/vegas-odds-linetracker/?sportid=mlb", "books": ["Circa", "Boomers", "BetMGM", "Caesars", "Westgate", "Stations", "South Point", "Wynn"], "games": [{"time": "2:15 PM ET", "open": {"Circa": {"rl": "-1.5 +150", "ml": "-114", "tot": "7"}, "Boomers": {"rl": "-1.5 +150", "ml": "-112", "tot": "7"}, "BetMGM": {"rl": "-1.5 +145", "ml": "-115", "tot": "7"}, "Caesars": {"rl": "-1.5 +153", "ml": "-117", "tot": "7.5"}, "Westgate": {"rl": null, "ml": null, "tot": null}, "Stations": {"rl": "-1.5 +155", "ml": "-113", "tot": "7"}, "South Point": {"rl": "-1.5 +150", "ml": "-115", "tot": "7"}, "Wynn": {"rl": "-1.5 +150", "ml": "-116", "tot": "7"}}, "away": {"name": "Philadelphia Phillies", "lines": {"Circa": {"rl": "-1.5 +155", "ml": "-112", "tot": "7 o -115"}, "Boomers": {"rl": "-1.5 +160", "ml": "-111", "tot": "7 o -110"}, "BetMGM": {"rl": "-1.5 +150", "ml": "-115", "tot": "7 o -120"}, "Caesars": {"rl": "-1.5 +153", "ml": "-115", "tot": "7 o -115"}, "Westgate": {"rl": null, "ml": null, "tot": null}, "Stations": {"rl": "-1.5 +155", "ml": "-112", "tot": "7 o -115"}, "South Point": {"rl": "-1.5 +155", "ml": "-110", "tot": "7 o -120"}, "Wynn": {"rl": "-1.5 +155", "ml": "-116", "tot": "7 o -115"}}}, "home": {"name": "Atlanta Braves", "lines": {"Circa": {"rl": "+1.5 -180", "ml": "+102", "tot": "7 u -105"}, "Boomers": {"rl": "+1.5 -180", "ml": "+101", "tot": "7 u -110"}, "BetMGM": {"rl": "+1.5 -185", "ml": "+100", "tot": "7 u +100"}, "Caesars": {"rl": "+1.5 -182", "ml": "-102", "tot": "7 u -105"}, "Westgate": {"rl": null, "ml": null, "tot": null}, "Stations": {"rl": "+1.5 -180", "ml": "+102", "tot": "7 u -105"}, "South Point": {"rl": "+1.5 -175", "ml": "+100", "tot": "7 u +100"}, "Wynn": {"rl": "+1.5 -175", "ml": "+101", "tot": "7 u -105"}}}}, {"time": "5:00 PM ET", "open": {"Circa": {"rl": "+1.5 -185", "ml": "+123", "tot": "7.5"}, "Boomers": {"rl": "+1.5 -175", "ml": "+130", "tot": "7.5"}, "BetMGM": {"rl": "+1.5 -190", "ml": "+120", "tot": "7.5"}, "Caesars": {"rl": "+1.5 -173", "ml": "+128", "tot": "7.5"}, "Westgate": {"rl": null, "ml": null, "tot": null}, "Stations": {"rl": "+1.5 -175", "ml": "+131", "tot": "7.5"}, "South Point": {"rl": "+1.5 -180", "ml": "+130", "tot": "7.5"}, "Wynn": {"rl": "+1.5 -180", "ml": "+123", "tot": "7.5"}}, "away": {"name": "Chicago White Sox", "lines": {"Circa": {"rl": "+1.5 -165", "ml": "+132", "tot": "7.5 o -115"}, "Boomers": {"rl": "+1.5 -170", "ml": "+133", "tot": "7.5 o -110"}, "BetMGM": {"rl": "+1.5 -175", "ml": "+125", "tot": "7.5 o -110"}, "Caesars": {"rl": "+1.5 -176", "ml": "+128", "tot": "7.5 o -110"}, "Westgate": {"rl": null, "ml": null, "tot": null}, "Stations": {"rl": "+1.5 -165", "ml": "+135", "tot": "7.5 o -115"}, "South Point": {"rl": "+1.5 -165", "ml": "+135", "tot": "7.5 o -115"}, "Wynn": {"rl": "+1.5 -160", "ml": "+136", "tot": "7.5 o -110"}}}, "home": {"name": "Houston Astros", "lines": {"Circa": {"rl": "-1.5 +145", "ml": "-142", "tot": "7.5 u -105"}, "Boomers": {"rl": "-1.5 +150", "ml": "-143", "tot": "7.5 u -110"}, "BetMGM": {"rl": "-1.5 +145", "ml": "-150", "tot": "7.5 u -110"}, "Caesars": {"rl": "-1.5 +148", "ml": "-150", "tot": "7.5 u -108"}, "Westgate": {"rl": null, "ml": null, "tot": null}, "Stations": {"rl": "-1.5 +145", "ml": "-153", "tot": "7.5 u -105"}, "South Point": {"rl": "-1.5 +145", "ml": "-145", "tot": "7.5 u -105"}, "Wynn": {"rl": "-1.5 +140", "ml": "-151", "tot": "7.5 u -110"}}}}, {"time": "8:00 PM ET", "open": {"Circa": {"rl": "+1.5 -195", "ml": "+120", "tot": "6.5"}, "Boomers": {"rl": "+1.5 -190", "ml": "+119", "tot": "6.5"}, "BetMGM": {"rl": "+1.5 -200", "ml": "+115", "tot": "6.5"}, "Caesars": {"rl": "+1.5 -205", "ml": "+114", "tot": "6.5"}, "Westgate": {"rl": null, "ml": null, "tot": null}, "Stations": {"rl": "+1.5 -200", "ml": "+120", "tot": "6.5"}, "South Point": {"rl": "+1.5 -205", "ml": "+125", "tot": "6.5"}, "Wynn": {"rl": "+1.5 -200", "ml": "+118", "tot": "6.5"}}, "away": {"name": "Boston Red Sox", "lines": {"Circa": {"rl": "+1.5 -193", "ml": "+122", "tot": "6.5 o -120"}, "Boomers": {"rl": "+1.5 -190", "ml": "+122", "tot": "6.5 o -120"}, "BetMGM": {"rl": "+1.5 -200", "ml": "+120", "tot": "6.5 o -120"}, "Caesars": {"rl": "+1.5 -197", "ml": "+118", "tot": "6.5 o -122"}, "Westgate": {"rl": null, "ml": null, "tot": null}, "Stations": {"rl": "+1.5 -200", "ml": "+120", "tot": "6.5 o -120"}, "South Point": {"rl": "+1.5 -190", "ml": "+120", "tot": "6.5 o -135"}, "Wynn": {"rl": "+1.5 -185", "ml": "+126", "tot": "6.5 o -120"}}}, "home": {"name": "New York Yankees", "lines": {"Circa": {"rl": "-1.5 +168", "ml": "-132", "tot": "6.5 u +100"}, "Boomers": {"rl": "-1.5 +170", "ml": "-132", "tot": "6.5 u +100"}, "BetMGM": {"rl": "-1.5 +165", "ml": "-140", "tot": "6.5 u +100"}, "Caesars": {"rl": "-1.5 +166", "ml": "-137", "tot": "6.5 u +104"}, "Westgate": {"rl": null, "ml": null, "tot": null}, "Stations": {"rl": "-1.5 +170", "ml": "-135", "tot": "6.5 u +100"}, "South Point": {"rl": "-1.5 +170", "ml": "-130", "tot": "6.5 u +115"}, "Wynn": {"rl": "-1.5 +165", "ml": "-141", "tot": "6.5 u +100"}}}}, {"time": "10:00 PM ET", "open": {"Circa": {"rl": "+1.5 -184", "ml": "+120", "tot": "7.5"}, "Boomers": {"rl": "+1.5 -190", "ml": "+116", "tot": "7.5"}, "BetMGM": {"rl": "+1.5 -200", "ml": "+115", "tot": "7.5"}, "Caesars": {"rl": "+1.5 -197", "ml": "+132", "tot": "7.5"}, "Westgate": {"rl": null, "ml": null, "tot": null}, "Stations": {"rl": "+1.5 -190", "ml": "+116", "tot": "7.5"}, "South Point": {"rl": "+1.5 -200", "ml": "+125", "tot": "7.5"}, "Wynn": {"rl": "+1.5 -200", "ml": "+118", "tot": "7.5"}}, "away": {"name": "Chicago Cubs", "lines": {"Circa": {"rl": "+1.5 -180", "ml": "+127", "tot": "7.5 o +105"}, "Boomers": {"rl": "+1.5 -175", "ml": "+129", "tot": "7.5 o +105"}, "BetMGM": {"rl": "+1.5 -190", "ml": "+120", "tot": "7.5 o +105"}, "Caesars": {"rl": "+1.5 -190", "ml": "+123", "tot": "7.5 o +100"}, "Westgate": {"rl": null, "ml": null, "tot": null}, "Stations": {"rl": "+1.5 -180", "ml": "+127", "tot": "7.5 o +105"}, "South Point": {"rl": "+1.5 -180", "ml": "+125", "tot": "7.5 o +100"}, "Wynn": {"rl": "+1.5 -175", "ml": "+127", "tot": "7.5 o +100"}}}, "home": {"name": "San Diego Padres", "lines": {"Circa": {"rl": "-1.5 +155", "ml": "-137", "tot": "7.5 u -125"}, "Boomers": {"rl": "-1.5 +155", "ml": "-139", "tot": "7.5 u -125"}, "BetMGM": {"rl": "-1.5 +155", "ml": "-140", "tot": "7.5 u -125"}, "Caesars": {"rl": "-1.5 +159", "ml": "-143", "tot": "7.5 u -118"}, "Westgate": {"rl": null, "ml": null, "tot": null}, "Stations": {"rl": "-1.5 +155", "ml": "-143", "tot": "7.5 u -125"}, "South Point": {"rl": "-1.5 +160", "ml": "-135", "tot": "7.5 u -120"}, "Wynn": {"rl": "-1.5 +155", "ml": "-142", "tot": "7.5 u -120"}}}}]};
 function dash(v){ return v==null||v===""?"—":v; }
 function renderVegas(){
+  renderOpenLines();
   const box=el("vegasBody"); if(!box||!VEGAS_BOARD) return;
   const books=VEGAS_BOARD.books||[];
   const head=books.map(b=>`<th>${b}<div class="na">now · open</div></th>`).join("");
